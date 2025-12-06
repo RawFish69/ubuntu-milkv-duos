@@ -1,0 +1,65 @@
+name: Build Milk-V Duo S Image
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Cache SDK and Tools
+      id: cache-sdk
+      uses: actions/cache@v4
+      with:
+        path: |
+          duo-buildroot-sdk/host-tools
+          duo-buildroot-sdk/buildroot-2021.05/output/host
+          duo-buildroot-sdk/install
+        # key based on config file to invalidate if we change defconfig logic or sdk version
+        key: ${{ runner.os }}-sdk-${{ hashFiles('configure.sh') }}
+        restore-keys: |
+          ${{ runner.os }}-sdk-
+
+    - name: Install Dependencies
+      run: |
+        sudo bash install_dependencies.sh
+
+    - name: Configure Environment
+      # Clones SDK, patches kernel config, downloads Ubuntu Base
+      run: |
+        bash configure.sh
+
+    - name: Build SDK
+      # This takes the longest time. 
+      # build_sdk.sh calls the SDK's build.sh wrapper
+      run: |
+        sudo bash build_sdk.sh
+
+    - name: Install Systemd
+      # Prepares the Ubuntu rootfs with QEMU and installs systemd
+      run: |
+        sudo bash install_systemd.sh
+
+    - name: Build Final Image
+      # Combines SDK kernel/bootloader with Ubuntu rootfs
+      run: |
+        # Set a slightly larger image size for CI to be safe
+        export IMAGE_SIZE_MB=3072
+        sudo bash build_image.sh
+
+    - name: Upload Image Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: milkv-duos-ubuntu-image
+        path: |
+          duo-buildroot-sdk/out/*.img
+          !duo-buildroot-sdk/out/*-stock.img
+        if-no-files-found: error
