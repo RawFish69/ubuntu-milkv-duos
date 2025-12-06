@@ -1,0 +1,17 @@
+# SDK and Build Dependencies (created by configure.sh)
+duo-buildroot-sdk/
+ubuntu_base/
+
+# Build Artifacts
+*.img
+*.tar.gz
+*.log
+/out/
+/build/
+
+# Temporary Files
+tmp/
+
+# System Files
+.DS_Store
+Thumbs.db
