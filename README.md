@@ -1,15 +1,17 @@
 # Ubuntu Base Port for Milk-V Duo S
 
 Port Ubuntu Base 22.04 to Milk-V Duo S (SG2000/CV1813H) by replacing Buildroot rootfs while keeping official kernel and bootloader. 
+> This was made for a robotics research project on my other github account but that repo is closed source atm. Also, use this repo at your own risk.
 
 ## Automated Build
 
-**GitHub Actions** can automatically build the image.
+**GitHub Actions** CI checks the setup on every push. 
 
-1. **Fork** this repository.
-2. Navigate to the **Actions** tab in your fork.
-3. Select **Build Milk-V Duo S Image** and click **Run workflow**.
-4. Once completed, download the `milkv-duos-ubuntu-image` from the **Artifacts** section.
+To build the full image:
+1. Go to **Actions** tab.
+2. Select **Manual Full Build**.
+3. Click **Run workflow**.
+4. Download artifact when done.
 
 ## Local Build
 
@@ -45,59 +47,28 @@ IMAGE_SIZE_MB=4096 sudo bash build_image.sh
 
 ## Connecting to the Board
 
-### Serial Console (Recommended for First Boot)
+### Serial Console (UART0)
 
-Connect a **3.3V** USB-to-TTL adapter to **UART0** on Header J3:
+Use a USB-to-TTL adapter (3.3V logic).
 
-| Duo S Pin | Name | Adapter Pin |
-|-----------|------|-------------|
-| Pin 8 | A16 (UART0_TX) | RX |
-| Pin 10 | A17 (UART0_RX) | TX |
-| Pin 9 | GND | GND |
+- **TX** to Pin 10 (Rx)
+- **RX** to Pin 8 (Tx)
+- **GND** to Pin 9
+- **Baud**: 115200
 
-**Settings:** 115200 baud, 8N1, no flow control
+> [!CAUTION]
+> Use 3.3V adapter settings. 5V logic might be harmful.
 
-⚠️ **Use 3.3V adapter only** - 5V will damage the board!
+### SSH (USB RNDIS)
 
-On Windows, use PuTTY or similar. On Linux/WSL:
+Connect via USB-C. Board IP is `192.168.42.1`.
+
+**Credentials**: `root` / `milkv`
+
+**Windows**: RNDIS driver should auto-install. SSH to `root@192.168.42.1`.
+**Linux/WSL**:
 ```bash
-screen /dev/ttyUSB0 115200
-# or
-minicom -D /dev/ttyUSB0 -b 115200
-```
-
-### SSH via USB RNDIS (USB Ethernet Gadget)
-
-The board presents itself as a USB network device when connected via USB-C.
-
-| Setting | Value |
-|---------|-------|
-| Board IP | `192.168.42.1` |
-| Host IP | `192.168.42.x` (DHCP assigned) |
-| Username | `root` |
-| Password | `milkv` |
-
-**Windows Setup:**
-
-1. Connect board via USB-C
-2. Windows should detect "RNDIS Gadget" network adapter
-3. The adapter should get IP `192.168.42.x` automatically
-4. SSH to the board:
-   ```
-   ssh root@192.168.42.1
-   ```
-
-**Linux/WSL Setup:**
-
-```bash
-# Check if usb0 interface appeared
-ip addr show usb0
-
-# If no IP, set manually:
-sudo ip addr add 192.168.42.2/24 dev usb0
-sudo ip link set usb0 up
-
-# SSH to board
+sudo ip addr add 192.168.42.2/24 dev usb0  # Set host IP if needed
 ssh root@192.168.42.1
 ```
 
