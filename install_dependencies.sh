@@ -16,7 +16,7 @@ echo "Updating package list..."
 sudo apt update
 
 # Base packages that should work on all Ubuntu versions
-BASE_PACKAGES="pkg-config build-essential ninja-build automake autoconf libtool wget curl git gcc libssl-dev bc squashfs-tools android-sdk-libsparse-utils jq scons parallel tree python3-dev python3-pip device-tree-compiler ssh cpio fakeroot flex bison genext2fs rsync unzip dosfstools mtools tcl openssh-client cmake expect libconfuse2 parted e2fsprogs"
+BASE_PACKAGES="pkg-config build-essential ninja-build automake autoconf libtool wget curl git gcc libssl-dev bc squashfs-tools android-sdk-libsparse-utils jq scons parallel tree python3-dev python3-pip device-tree-compiler ssh cpio fakeroot flex bison genext2fs rsync unzip dosfstools mtools tcl openssh-client cmake expect libconfuse2 parted e2fsprogs qemu-user-static binfmt-support"
 
 # Packages that may have different names or be obsolete
 # Try to install alternatives or skip if not available
