@@ -56,9 +56,6 @@ Use a USB-to-TTL adapter (3.3V logic).
 - **GND** to Pin 9
 - **Baud**: 115200
 
-> [!CAUTION]
-> Use 3.3V adapter settings. 5V logic might be harmful.
-
 ### SSH (USB RNDIS)
 
 Connect via USB-C. Board IP is `192.168.42.1`.
@@ -156,6 +153,13 @@ cd duo-buildroot-sdk
 
 If stock boots: proceed with Ubuntu steps.  
 If stock doesn't boot: check SD card, serial console, or try different USB cable.
+
+## Future Work
+
+I am working on additional features in the other repository - I plan to sync the following features here when possible, such as:
+*   **WiringX**: GPIO library support.
+*   **ROS2**: Robot Operating System 2 integration.
+*   And more...
 
 ## Quick Reference
 
