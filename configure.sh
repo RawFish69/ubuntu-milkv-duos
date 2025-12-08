@@ -43,11 +43,58 @@ if [ -f "$CONFIG_FILE" ]; then
         fi
     }
 
+    # Basic systemd requirements
     ensure_config "CONFIG_CGROUPS"
     ensure_config "CONFIG_NAMESPACES"
     ensure_config "CONFIG_AUTOFS4_FS"
     ensure_config "CONFIG_TMPFS_POSIX_ACL"
     ensure_config "CONFIG_SECCOMP"
+    
+    # Cgroup v2 support (critical for systemd 249+)
+    ensure_config "CONFIG_CGROUP_BPF"
+    ensure_config "CONFIG_CGROUP_CPUACCT"
+    ensure_config "CONFIG_CGROUP_DEVICE"
+    ensure_config "CONFIG_CGROUP_FREEZER"
+    ensure_config "CONFIG_CGROUP_HUGETLB"
+    ensure_config "CONFIG_CGROUP_NET_CLASSID"
+    ensure_config "CONFIG_CGROUP_NET_PRIO"
+    ensure_config "CONFIG_CGROUP_PERF"
+    ensure_config "CONFIG_CGROUP_PIDS"
+    ensure_config "CONFIG_CGROUP_RDMA"
+    ensure_config "CONFIG_CGROUP_SCHED"
+    ensure_config "CONFIG_CPUSETS"
+    ensure_config "CONFIG_MEMCG"
+    ensure_config "CONFIG_BLK_CGROUP"
+    
+    # BPF support (required by modern systemd)
+    ensure_config "CONFIG_BPF"
+    ensure_config "CONFIG_BPF_SYSCALL"
+    ensure_config "CONFIG_BPF_JIT"
+    ensure_config "CONFIG_HAVE_EBPF_JIT"
+    
+    # IPC namespace support
+    ensure_config "CONFIG_IPC_NS"
+    ensure_config "CONFIG_NET_NS"
+    ensure_config "CONFIG_PID_NS"
+    ensure_config "CONFIG_USER_NS"
+    ensure_config "CONFIG_UTS_NS"
+    
+    # Essential filesystem features
+    ensure_config "CONFIG_DEVTMPFS"
+    ensure_config "CONFIG_DEVTMPFS_MOUNT"
+    ensure_config "CONFIG_TMPFS"
+    ensure_config "CONFIG_SYSFS"
+    ensure_config "CONFIG_PROC_FS"
+    
+    # Additional systemd requirements
+    ensure_config "CONFIG_SIGNALFD"
+    ensure_config "CONFIG_TIMERFD"
+    ensure_config "CONFIG_EPOLL"
+    ensure_config "CONFIG_INOTIFY_USER"
+    ensure_config "CONFIG_FANOTIFY"
+    ensure_config "CONFIG_FHANDLE"
+    ensure_config "CONFIG_EVENTFD"
+    ensure_config "CONFIG_SHMEM"
     
     echo "Kernel config patched."
 else
