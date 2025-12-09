@@ -11,16 +11,24 @@ jobs:
     - name: Maximize build space
       uses: easimon/maximize-build-space@master
       with:
-        root-reserve-mb: 512
-        swap-size-mb: 1024
+        root-reserve-mb: 2048    # Increased reserve for safety
+        swap-size-mb: 2048        # Increased swap
         remove-dotnet: 'true'
         remove-android: 'true'
         remove-haskell: 'true'
         remove-codeql: 'true'
         remove-docker-images: 'true'
+        # Additional aggressive cleanup
+        remove-cached-tools: 'true'
         
     - name: Checkout repository
       uses: actions/checkout@v4
+
+    - name: Check initial disk space
+      run: |
+        echo "=== Initial Disk Space ==="
+        df -h
+        echo "=========================="
 
     - name: Cache SDK and Tools
       id: cache-sdk
@@ -30,10 +38,12 @@ jobs:
           duo-buildroot-sdk/host-tools
           duo-buildroot-sdk/buildroot-2021.05/output/host
           duo-buildroot-sdk/install
-        # key based on config file to invalidate if we change defconfig logic or sdk version
-        key: ${{ runner.os }}-sdk-${{ hashFiles('configure.sh') }}
+        # Exclude massive intermediate directories:
+        # - dl/ contains downloaded source tarballs (~5-10GB)
+        # - output/build/ contains object files (~10-15GB)
+        key: ${{ runner.os }}-sdk-optimized-${{ hashFiles('configure.sh') }}
         restore-keys: |
-          ${{ runner.os }}-sdk-
+          ${{ runner.os }}-sdk-optimized-
 
     - name: Install Dependencies
       run: |
@@ -44,16 +54,52 @@ jobs:
       run: |
         bash configure.sh
 
+    - name: Check disk space after configure
+      run: |
+        echo "=== Disk Space After Configure ==="
+        df -h
+        echo "==================================="
+
     - name: Build SDK
       # This takes the longest time. 
       # build_sdk.sh calls the SDK's build.sh wrapper
       run: |
         sudo bash build_sdk.sh
 
+    - name: Check disk space after SDK build
+      run: |
+        echo "=== Disk Space After SDK Build ==="
+        df -h
+        echo "==================================="
+
+    - name: Clean buildroot intermediate files
+      run: |
+        echo "=== Cleaning Buildroot Intermediate Files ==="
+        # Remove downloaded source tarballs (can be re-downloaded if needed)
+        if [ -d "duo-buildroot-sdk/buildroot-2021.05/dl" ]; then
+          echo "Removing dl/ directory..."
+          sudo rm -rf duo-buildroot-sdk/buildroot-2021.05/dl
+        fi
+        # Remove build intermediates (object files, etc.)
+        if [ -d "duo-buildroot-sdk/buildroot-2021.05/output/build" ]; then
+          echo "Removing output/build/ directory..."
+          sudo rm -rf duo-buildroot-sdk/buildroot-2021.05/output/build
+        fi
+        # Keep output/images (kernel, bootloader) and output/host (toolchain)
+        echo "=== Cleanup Complete ==="
+        df -h
+        echo "========================="
+
     - name: Install Systemd
       # Prepares the Ubuntu rootfs with QEMU and installs systemd
       run: |
         sudo bash install_systemd.sh
+
+    - name: Check disk space after systemd install
+      run: |
+        echo "=== Disk Space After Systemd Install ==="
+        df -h
+        echo "========================================="
 
     - name: Build Final Image
       # Combines SDK kernel/bootloader with Ubuntu rootfs
@@ -61,6 +107,12 @@ jobs:
         # Set a slightly larger image size for CI to be safe
         export IMAGE_SIZE_MB=3072
         sudo bash build_image.sh
+
+    - name: Final disk space report
+      run: |
+        echo "=== Final Disk Space ==="
+        df -h
+        echo "========================"
 
     - name: Upload Image Artifact
       uses: actions/upload-artifact@v4

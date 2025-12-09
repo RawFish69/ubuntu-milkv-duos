@@ -87,12 +87,12 @@ if sudo chroot "$UBUNTU_BASE" /usr/bin/test -x /usr/bin/apt-get; then
     sudo env DEBIAN_FRONTEND=noninteractive chroot "$UBUNTU_BASE" \
         /usr/bin/apt-get install -y --no-install-recommends \
         systemd systemd-sysv udev dbus networkd-dispatcher \
-        iputils-ping netbase ca-certificates 2>&1 | tee /tmp/systemd_install.log
+        iputils-ping netbase ca-certificates openssh-server 2>&1 | tee /tmp/systemd_install.log
 else
     (cd "$UBUNTU_BASE" && sudo env DEBIAN_FRONTEND=noninteractive /usr/bin/qemu-riscv64-static \
         -L . /usr/bin/apt-get install -y --no-install-recommends \
         systemd systemd-sysv udev dbus networkd-dispatcher \
-        iputils-ping netbase ca-certificates) 2>&1 | tee /tmp/systemd_install.log
+        iputils-ping netbase ca-certificates openssh-server) 2>&1 | tee /tmp/systemd_install.log
 fi
 
 # Setup init symlink
