@@ -44,21 +44,27 @@ cleanup() {
     echo "Cleaning up..."
     cd "$SCRIPT_DIR"
     
-    # Unmount Ubuntu Base bind mounts
-    sudo umount -l "$UBUNTU_BASE/dev/random" 2>/dev/null || true
-    sudo umount -l "$UBUNTU_BASE/dev" 2>/dev/null || true
-    sudo umount -l "$UBUNTU_BASE/proc" 2>/dev/null || true
-    sudo umount -l "$UBUNTU_BASE/sys" 2>/dev/null || true
-    sudo umount -l "$UBUNTU_BASE/tmp" 2>/dev/null || true
+    # Unmount Ubuntu Base bind mounts (in reverse order)
+    sudo umount "$UBUNTU_BASE/dev/random" 2>/dev/null || true
+    sudo umount "$UBUNTU_BASE/tmp" 2>/dev/null || true
+    sudo umount "$UBUNTU_BASE/sys" 2>/dev/null || true
+    sudo umount "$UBUNTU_BASE/proc" 2>/dev/null || true
+    sudo umount "$UBUNTU_BASE/dev" 2>/dev/null || true
     
     # Unmount image partitions
-    sudo umount -l "$SD_MOUNT" 2>/dev/null || true
-    sudo umount -l "$BOOT_MOUNT" 2>/dev/null || true
+    sudo umount "$SD_MOUNT" 2>/dev/null || true
+    sudo umount "$BOOT_MOUNT" 2>/dev/null || true
+    
+    # Sync before detaching loop device
+    sync
     
     # Detach loop device
     if [ -n "$LOOP_DEV" ]; then
         sudo losetup -d "$LOOP_DEV" 2>/dev/null || true
     fi
+    
+    # Final sync to ensure all filesystem operations complete
+    sync
 }
 
 trap cleanup EXIT
@@ -173,12 +179,15 @@ sudo ln -sf /lib/systemd/system/systemd-networkd.service "$UBUNTU_BASE/etc/syste
 sudo mkdir -p "$UBUNTU_BASE/etc/systemd/system/getty.target.wants"
 sudo ln -sf /lib/systemd/system/serial-getty@.service "$UBUNTU_BASE/etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service" 2>/dev/null || true
 
-# Unmount chroot bind mounts before copying
+# Unmount chroot bind mounts before copying (in reverse order)
 cd "$SCRIPT_DIR"
-sudo umount -l "$UBUNTU_BASE/tmp" 2>/dev/null || true
-sudo umount -l "$UBUNTU_BASE/sys" 2>/dev/null || true
-sudo umount -l "$UBUNTU_BASE/proc" 2>/dev/null || true
-sudo umount -l "$UBUNTU_BASE/dev" 2>/dev/null || true
+sudo umount "$UBUNTU_BASE/tmp" 2>/dev/null || true
+sudo umount "$UBUNTU_BASE/sys" 2>/dev/null || true
+sudo umount "$UBUNTU_BASE/proc" 2>/dev/null || true
+sudo umount "$UBUNTU_BASE/dev" 2>/dev/null || true
+# Ensure unmounts complete before next operations
+sync
+sleep 1
 
 # Copy Ubuntu Base to image
 echo "Copying Ubuntu Base to image..."
@@ -238,6 +247,7 @@ fi
 
 # Final sync and cleanup
 sudo sync
+sleep 1
 
 # Detach loop device
 sudo losetup -d "$LOOP_DEV"
