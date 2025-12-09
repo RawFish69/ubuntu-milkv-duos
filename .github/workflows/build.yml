@@ -1,7 +1,19 @@
-name: Manual Full Build
+name: Build Milk-V Duo S Ubuntu Image
 
 on:
+  # Auto-run on push/PR for quick validation
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  # Allow manual full builds
   workflow_dispatch:
+    inputs:
+      build_full_image:
+        description: 'Build full Ubuntu image (otherwise just validate setup)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -9,6 +21,8 @@ jobs:
     
     steps:
     - name: Maximize build space
+      # Only maximize space for full builds (expensive operation)
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
       uses: easimon/maximize-build-space@master
       with:
         root-reserve-mb: 2048
@@ -23,6 +37,7 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Check initial disk space
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
       run: |
         echo "=== Initial Disk Space ==="
         df -h
@@ -53,24 +68,29 @@ jobs:
         bash configure.sh
 
     - name: Check disk space after configure
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
       run: |
         echo "=== Disk Space After Configure ==="
         df -h
         echo "==================================="
 
+    # Full build steps (only run on manual trigger with flag)
     - name: Build SDK
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
       # This takes the longest time. 
       # build_sdk.sh calls the SDK's build.sh wrapper
       run: |
         sudo bash build_sdk.sh
 
     - name: Check disk space after SDK build
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
       run: |
         echo "=== Disk Space After SDK Build ==="
         df -h
         echo "==================================="
 
     - name: Clean buildroot intermediate files
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
       run: |
         echo "=== Cleaning Buildroot Intermediate Files ==="
         # Remove downloaded source tarballs (can be re-downloaded if needed)
@@ -89,11 +109,13 @@ jobs:
         echo "========================="
 
     - name: Install Systemd
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
       # Prepares the Ubuntu rootfs with QEMU and installs systemd
       run: |
         sudo bash install_systemd.sh
 
     - name: Check disk space after systemd install
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
       run: |
         echo "=== Disk Space After Systemd Install ==="
         # Wait for any pending unmounts to complete
@@ -103,6 +125,7 @@ jobs:
         echo "========================================="
 
     - name: Build Final Image
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
       # Combines SDK kernel/bootloader with Ubuntu rootfs
       run: |
         # Set a slightly larger image size for CI to be safe
@@ -110,6 +133,7 @@ jobs:
         sudo bash build_image.sh
 
     - name: Final disk space report
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
       run: |
         echo "=== Final Disk Space ==="
         # Wait for any pending unmounts from build_image.sh to complete
@@ -119,6 +143,7 @@ jobs:
         echo "========================"
 
     - name: Upload Image Artifact
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
       uses: actions/upload-artifact@v4
       with:
         name: milkv-duos-ubuntu-image
