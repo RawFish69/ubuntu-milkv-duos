@@ -98,7 +98,10 @@ jobs:
     - name: Check disk space after systemd install
       run: |
         echo "=== Disk Space After Systemd Install ==="
-        df -h
+        # Wait for any pending unmounts to complete
+        sync
+        sleep 2
+        df -h || echo "Warning: df command failed, but continuing..."
         echo "========================================="
 
     - name: Build Final Image

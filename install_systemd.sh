@@ -109,5 +109,13 @@ else
 fi
 
 # Cleanup
-sudo umount -l dev/random 2>/dev/null || true
-sudo umount -l dev proc sys tmp 2>/dev/null || true
+# Use regular umount instead of lazy (-l) to avoid timing issues
+sudo umount dev/random 2>/dev/null || true
+sudo umount tmp 2>/dev/null || true
+sudo umount sys 2>/dev/null || true
+sudo umount proc 2>/dev/null || true
+sudo umount dev 2>/dev/null || true
+
+# Ensure all filesystem operations are complete
+sync
+sleep 1
