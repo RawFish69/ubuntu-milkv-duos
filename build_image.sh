@@ -44,27 +44,21 @@ cleanup() {
     echo "Cleaning up..."
     cd "$SCRIPT_DIR"
     
-    # Unmount Ubuntu Base bind mounts (in reverse order)
-    sudo umount "$UBUNTU_BASE/dev/random" 2>/dev/null || true
-    sudo umount "$UBUNTU_BASE/tmp" 2>/dev/null || true
-    sudo umount "$UBUNTU_BASE/sys" 2>/dev/null || true
-    sudo umount "$UBUNTU_BASE/proc" 2>/dev/null || true
-    sudo umount "$UBUNTU_BASE/dev" 2>/dev/null || true
+    # Unmount Ubuntu Base bind mounts
+    sudo umount -l "$UBUNTU_BASE/dev/random" 2>/dev/null || true
+    sudo umount -l "$UBUNTU_BASE/dev" 2>/dev/null || true
+    sudo umount -l "$UBUNTU_BASE/proc" 2>/dev/null || true
+    sudo umount -l "$UBUNTU_BASE/sys" 2>/dev/null || true
+    sudo umount -l "$UBUNTU_BASE/tmp" 2>/dev/null || true
     
     # Unmount image partitions
-    sudo umount "$SD_MOUNT" 2>/dev/null || true
-    sudo umount "$BOOT_MOUNT" 2>/dev/null || true
-    
-    # Sync before detaching loop device
-    sync
+    sudo umount -l "$SD_MOUNT" 2>/dev/null || true
+    sudo umount -l "$BOOT_MOUNT" 2>/dev/null || true
     
     # Detach loop device
     if [ -n "$LOOP_DEV" ]; then
         sudo losetup -d "$LOOP_DEV" 2>/dev/null || true
     fi
-    
-    # Final sync to ensure all filesystem operations complete
-    sync
 }
 
 trap cleanup EXIT
@@ -107,6 +101,77 @@ fi
 echo ""
 lsblk "$LOOP_DEV"
 echo ""
+
+# Expand the rootfs partition if it's too small for our expanded Ubuntu base
+echo "Checking rootfs partition size..."
+CURRENT_SIZE=$(sudo blockdev --getsize64 "${LOOP_DEV}p${ROOT_PART_NUM}")
+CURRENT_SIZE_MB=$((CURRENT_SIZE / 1024 / 1024))
+echo "Current rootfs size: ${CURRENT_SIZE_MB}MB"
+
+# Our expanded Ubuntu base needs ~1.2GB, so expand to 2GB to be safe
+TARGET_SIZE_MB=2048
+
+if [ "$CURRENT_SIZE_MB" -lt "$TARGET_SIZE_MB" ]; then
+    echo "Rootfs partition is too small (${CURRENT_SIZE_MB}MB < ${TARGET_SIZE_MB}MB)"
+    echo "Expanding rootfs partition..."
+    
+    # First, unmount if mounted
+    sudo umount "${LOOP_DEV}p${ROOT_PART_NUM}" 2>/dev/null || true
+    
+    # Get partition start sector
+    PART_START=$(sudo fdisk -l "$LOOP_DEV" | grep "${LOOP_DEV}p${ROOT_PART_NUM}" | awk '{print $2}')
+    echo "Partition start sector: $PART_START"
+    
+    # Calculate new end sector for 2GB partition (2048MB * 1024 * 1024 / 512 bytes per sector)
+    NEW_SIZE_SECTORS=$((TARGET_SIZE_MB * 1024 * 1024 / 512))
+    NEW_END_SECTOR=$((PART_START + NEW_SIZE_SECTORS - 1))
+    
+    # Extend the image file to accommodate larger partition
+    IMAGE_SIZE=$(stat -c%s "$IMG_FILE")
+    NEW_IMAGE_SIZE=$((PART_START * 512 + NEW_SIZE_SECTORS * 512))
+    if [ "$NEW_IMAGE_SIZE" -gt "$IMAGE_SIZE" ]; then
+        echo "Extending image file to accommodate larger partition..."
+        sudo truncate -s "$NEW_IMAGE_SIZE" "$IMG_FILE"
+        
+        # Refresh loop device to see new size
+        sudo losetup -d "$LOOP_DEV"
+        LOOP_DEV=$(sudo losetup -f --show -P "$IMG_FILE")
+        echo "Re-attached loop device: $LOOP_DEV"
+    fi
+    
+    # Delete and recreate the rootfs partition with new size
+    echo "Recreating partition ${ROOT_PART_NUM} with larger size..."
+    sudo bash -c "fdisk $LOOP_DEV << EOF
+d
+${ROOT_PART_NUM}
+n
+p
+${ROOT_PART_NUM}
+${PART_START}
+${NEW_END_SECTOR}
+w
+EOF" || echo "fdisk completed (warnings are normal)"
+    
+    # Re-read partition table
+    sudo partprobe "$LOOP_DEV" || true
+    sleep 2
+    
+    # Force kernel to re-read partitions
+    sudo losetup -d "$LOOP_DEV"
+    LOOP_DEV=$(sudo losetup -f --show -P "$IMG_FILE")
+    echo "Re-attached loop device after partition resize: $LOOP_DEV"
+    sleep 1
+    
+    # Resize the ext4 filesystem to fill the partition
+    echo "Resizing ext4 filesystem..."
+    sudo e2fsck -f -y "${LOOP_DEV}p${ROOT_PART_NUM}" || true
+    sudo resize2fs "${LOOP_DEV}p${ROOT_PART_NUM}" || true
+    
+    echo "Partition expanded successfully!"
+    sudo fdisk -l "$LOOP_DEV"
+else
+    echo "Rootfs partition size is adequate (${CURRENT_SIZE_MB}MB)"
+fi
 
 # Mount rootfs partition
 echo "Mounting rootfs partition..."
@@ -156,9 +221,13 @@ sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "echo 'root:m
 # Set hostname
 echo "milkv-duos" | sudo tee "$UBUNTU_BASE/etc/hostname" > /dev/null
 
+# Configure g_ether module auto-loading
+echo "Configuring g_ether module auto-loading..."
+sudo bash -c 'echo "g_ether" > "$UBUNTU_BASE/etc/modules-load.d/g_ether.conf"'
+
 # Configure network for RNDIS (USB Ethernet gadget)
 sudo mkdir -p "$UBUNTU_BASE/etc/systemd/network"
-sudo bash -c 'cat > "$UBUNTU_BASE/etc/systemd/network/usb0.network" << EOF
+sudo bash -c 'cat > "$UBUNTU_BASE/etc/systemd/network/30-usb0.network" << EOF
 [Match]
 Name=usb0
 
@@ -179,15 +248,44 @@ sudo ln -sf /lib/systemd/system/systemd-networkd.service "$UBUNTU_BASE/etc/syste
 sudo mkdir -p "$UBUNTU_BASE/etc/systemd/system/getty.target.wants"
 sudo ln -sf /lib/systemd/system/serial-getty@.service "$UBUNTU_BASE/etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service" 2>/dev/null || true
 
-# Unmount chroot bind mounts before copying (in reverse order)
+# Configure SSH for root login
+echo "Configuring SSH server..."
+sudo mkdir -p "$UBUNTU_BASE/etc/ssh"
+if [ -f "$UBUNTU_BASE/etc/ssh/sshd_config" ]; then
+    sudo sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' "$UBUNTU_BASE/etc/ssh/sshd_config"
+    sudo sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' "$UBUNTU_BASE/etc/ssh/sshd_config"
+else
+    sudo bash -c "cat > $UBUNTU_BASE/etc/ssh/sshd_config << 'SSHEOF'
+Port 22
+PermitRootLogin yes
+PasswordAuthentication yes
+PubkeyAuthentication yes
+UsePAM yes
+X11Forwarding no
+PrintMotd no
+AcceptEnv LANG LC_*
+Subsystem sftp /usr/lib/openssh/sftp-server
+SSHEOF"
+fi
+
+# Enable SSH service
+if [ -f "$UBUNTU_BASE/lib/systemd/system/ssh.service" ]; then
+    sudo ln -sf /lib/systemd/system/ssh.service "$UBUNTU_BASE/etc/systemd/system/multi-user.target.wants/" 2>/dev/null || true
+fi
+if [ -f "$UBUNTU_BASE/lib/systemd/system/sshd.service" ]; then
+    sudo ln -sf /lib/systemd/system/sshd.service "$UBUNTU_BASE/etc/systemd/system/multi-user.target.wants/" 2>/dev/null || true
+fi
+
+# Setup SSH directories
+sudo mkdir -p "$UBUNTU_BASE/root/.ssh"
+sudo chmod 700 "$UBUNTU_BASE/root/.ssh"
+
+# Unmount chroot bind mounts before copying
 cd "$SCRIPT_DIR"
-sudo umount "$UBUNTU_BASE/tmp" 2>/dev/null || true
-sudo umount "$UBUNTU_BASE/sys" 2>/dev/null || true
-sudo umount "$UBUNTU_BASE/proc" 2>/dev/null || true
-sudo umount "$UBUNTU_BASE/dev" 2>/dev/null || true
-# Ensure unmounts complete before next operations
-sync
-sleep 1
+sudo umount -l "$UBUNTU_BASE/tmp" 2>/dev/null || true
+sudo umount -l "$UBUNTU_BASE/sys" 2>/dev/null || true
+sudo umount -l "$UBUNTU_BASE/proc" 2>/dev/null || true
+sudo umount -l "$UBUNTU_BASE/dev" 2>/dev/null || true
 
 # Copy Ubuntu Base to image
 echo "Copying Ubuntu Base to image..."
@@ -247,7 +345,6 @@ fi
 
 # Final sync and cleanup
 sudo sync
-sleep 1
 
 # Detach loop device
 sudo losetup -d "$LOOP_DEV"

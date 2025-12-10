@@ -26,12 +26,6 @@ echo ""
 cd "$SDK_DIR"
 ./build.sh milkv-duos-sd
 
-echo ""
-echo "==========================================" 
-echo "Build complete. Checking disk usage..."
-echo "=========================================="
-df -h | head -n 2
-
 # Find the generated image
 IMG_FILE=$(ls -t "$SDK_DIR/out"/milkv-duos-sd*.img 2>/dev/null | head -1)
 
@@ -54,44 +48,6 @@ if [ -n "$IMG_FILE" ] && [ -f "$IMG_FILE" ]; then
     echo ""
     echo "Image: $IMG_FILE"
     echo "Size:  $IMG_SIZE"
-    
-    # CI-specific cleanup to save disk space
-    if [ -n "$CI" ] || [ -n "$GITHUB_ACTIONS" ]; then
-        echo ""
-        echo "=========================================="
-        echo "CI Environment Detected - Cleaning Up"
-        echo "=========================================="
-        
-        # Remove downloaded source tarballs (5-10GB)
-        if [ -d "$SDK_DIR/buildroot-2021.05/dl" ]; then
-            DL_SIZE=$(du -sh "$SDK_DIR/buildroot-2021.05/dl" 2>/dev/null | cut -f1)
-            echo "Removing buildroot downloads (dl/): $DL_SIZE"
-            rm -rf "$SDK_DIR/buildroot-2021.05/dl"
-        fi
-        
-        # Remove build intermediates (object files, 10-15GB)
-        if [ -d "$SDK_DIR/buildroot-2021.05/output/build" ]; then
-            BUILD_SIZE=$(du -sh "$SDK_DIR/buildroot-2021.05/output/build" 2>/dev/null | cut -f1)
-            echo "Removing build intermediates (output/build/): $BUILD_SIZE"
-            rm -rf "$SDK_DIR/buildroot-2021.05/output/build"
-        fi
-        
-        # Clean up buildroot work directories
-        if [ -d "$SDK_DIR/buildroot-2021.05/output/target" ]; then
-            echo "Removing temporary target rootfs (output/target/)"
-            rm -rf "$SDK_DIR/buildroot-2021.05/output/target"
-        fi
-        
-        echo ""
-        echo "Cleanup complete. Disk space after cleanup:"
-        df -h | head -n 2
-        echo ""
-        echo "Note: Preserved essential files:"
-        echo "  - output/host/ (cross-compile toolchain)"
-        echo "  - output/images/ (kernel, bootloader)"
-        echo "  - out/ (final images)"
-    fi
-    
     echo ""
     echo "Next steps:"
     echo "  1. TEST STOCK IMAGE FIRST (recommended):"
@@ -106,4 +62,3 @@ else
     echo ""
     echo "WARNING: Could not find generated image in $SDK_DIR/out/"
 fi
-

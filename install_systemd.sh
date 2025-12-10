@@ -81,18 +81,34 @@ else
     (cd "$UBUNTU_BASE" && sudo env DEBIAN_FRONTEND=noninteractive /usr/bin/qemu-riscv64-static -L . /usr/bin/apt-get update) 2>&1 | head -20
 fi
 
-# Install systemd
-echo "Installing systemd..."
+# Install systemd and essential system utilities
+echo "Installing systemd and system utilities..."
 if sudo chroot "$UBUNTU_BASE" /usr/bin/test -x /usr/bin/apt-get; then
     sudo env DEBIAN_FRONTEND=noninteractive chroot "$UBUNTU_BASE" \
         /usr/bin/apt-get install -y --no-install-recommends \
         systemd systemd-sysv udev dbus networkd-dispatcher \
-        iputils-ping netbase ca-certificates openssh-server 2>&1 | tee /tmp/systemd_install.log
+        iputils-ping netbase ca-certificates \
+        openssh-server openssh-client \
+        net-tools iproute2 ethtool wireless-tools traceroute dnsutils \
+        nano vim-tiny \
+        build-essential cmake git pkg-config \
+        usbutils pciutils i2c-tools \
+        busybox-static kmod sudo htop curl wget \
+        rsync less file strace \
+        2>&1 | tee /tmp/systemd_install.log
 else
     (cd "$UBUNTU_BASE" && sudo env DEBIAN_FRONTEND=noninteractive /usr/bin/qemu-riscv64-static \
         -L . /usr/bin/apt-get install -y --no-install-recommends \
         systemd systemd-sysv udev dbus networkd-dispatcher \
-        iputils-ping netbase ca-certificates openssh-server) 2>&1 | tee /tmp/systemd_install.log
+        iputils-ping netbase ca-certificates \
+        openssh-server openssh-client \
+        net-tools iproute2 ethtool wireless-tools traceroute dnsutils \
+        nano vim-tiny \
+        build-essential cmake git pkg-config \
+        usbutils pciutils i2c-tools \
+        busybox-static kmod sudo htop curl wget \
+        rsync less file strace \
+        ) 2>&1 | tee /tmp/systemd_install.log
 fi
 
 # Setup init symlink
@@ -109,13 +125,5 @@ else
 fi
 
 # Cleanup
-# Use regular umount instead of lazy (-l) to avoid timing issues
-sudo umount dev/random 2>/dev/null || true
-sudo umount tmp 2>/dev/null || true
-sudo umount sys 2>/dev/null || true
-sudo umount proc 2>/dev/null || true
-sudo umount dev 2>/dev/null || true
-
-# Ensure all filesystem operations are complete
-sync
-sleep 1
+sudo umount -l dev/random 2>/dev/null || true
+sudo umount -l dev proc sys tmp 2>/dev/null || true

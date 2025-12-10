@@ -43,6 +43,23 @@ if [ -f "$CONFIG_FILE" ]; then
         fi
     }
 
+    # Helper to ensure config is set as module (=m)
+    ensure_config_module() {
+        local config="$1"
+        if ! grep -q "^${config}=" "$CONFIG_FILE" && ! grep -q "^${config} is not set" "$CONFIG_FILE"; then
+            echo "  Adding $config=m (module)"
+            echo "$config=m" >> "$CONFIG_FILE"
+        elif grep -q "^# ${config} is not set" "$CONFIG_FILE"; then
+            echo "  Enabling $config=m (module)"
+            sed -i "s/^# ${config} is not set/${config}=m/" "$CONFIG_FILE"
+        elif grep -q "^${config}=y" "$CONFIG_FILE"; then
+            echo "  Converting $config to module (y -> m)"
+            sed -i "s/^${config}=y/${config}=m/" "$CONFIG_FILE"
+        else
+            echo "  $config already set"
+        fi
+    }
+
     # Basic systemd requirements
     ensure_config "CONFIG_CGROUPS"
     ensure_config "CONFIG_NAMESPACES"
@@ -96,6 +113,78 @@ if [ -f "$CONFIG_FILE" ]; then
     ensure_config "CONFIG_EVENTFD"
     ensure_config "CONFIG_SHMEM"
     
+    # USB Gadget Support for USB-C Networking
+    echo "Configuring USB Gadget subsystem..."
+    
+    # Core USB support
+    ensure_config "CONFIG_USB_SUPPORT"
+    ensure_config "CONFIG_USB"
+    
+    # USB Gadget base configuration
+    ensure_config "CONFIG_USB_GADGET"
+    ensure_config "CONFIG_USB_GADGET_VBUS_DRAW"
+    
+    # USB Gadget controller drivers (platform-specific)
+    ensure_config "CONFIG_USB_MUSB_HDRC"
+    ensure_config "CONFIG_USB_MUSB_GADGET"
+    ensure_config "CONFIG_USB_MUSB_DUAL_ROLE"
+    
+    # Composite USB Device support (required for g_multi, etc.)
+    ensure_config_module "CONFIG_USB_CONFIGFS"
+    ensure_config_module "CONFIG_USB_CONFIGFS_SERIAL"
+    ensure_config_module "CONFIG_USB_CONFIGFS_ACM"
+    ensure_config_module "CONFIG_USB_CONFIGFS_OBEX"
+    ensure_config_module "CONFIG_USB_CONFIGFS_NCM"
+    ensure_config_module "CONFIG_USB_CONFIGFS_ECM"
+    ensure_config_module "CONFIG_USB_CONFIGFS_ECM_SUBSET"
+    ensure_config_module "CONFIG_USB_CONFIGFS_RNDIS"
+    ensure_config_module "CONFIG_USB_CONFIGFS_EEM"
+    ensure_config_module "CONFIG_USB_CONFIGFS_MASS_STORAGE"
+    ensure_config_module "CONFIG_USB_CONFIGFS_F_FS"
+    
+    # USB Gadget function drivers
+    ensure_config_module "CONFIG_USB_LIBCOMPOSITE"
+    ensure_config_module "CONFIG_USB_F_ACM"
+    ensure_config_module "CONFIG_USB_F_SS_LB"
+    ensure_config_module "CONFIG_USB_U_SERIAL"
+    ensure_config_module "CONFIG_USB_U_ETHER"
+    ensure_config_module "CONFIG_USB_F_SERIAL"
+    ensure_config_module "CONFIG_USB_F_OBEX"
+    ensure_config_module "CONFIG_USB_F_NCM"
+    ensure_config_module "CONFIG_USB_F_ECM"
+    ensure_config_module "CONFIG_USB_F_EEM"
+    ensure_config_module "CONFIG_USB_F_SUBSET"
+    ensure_config_module "CONFIG_USB_F_RNDIS"
+    ensure_config_module "CONFIG_USB_F_MASS_STORAGE"
+    ensure_config_module "CONFIG_USB_F_FS"
+    
+    # USB Ethernet Gadget drivers (g_ether module)
+    # CONFIG_USB_ETH=m builds the g_ether.ko kernel module which provides
+    # RNDIS/ECM USB Ethernet gadget functionality for USB-C OTG networking.
+    # This enables the usb0 interface (192.168.42.1) when the board is plugged
+    # into a host PC via the USB-C OTG port.
+    echo "Configuring USB Ethernet gadget (g_ether module)..."
+    ensure_config_module "CONFIG_USB_ETH"
+    ensure_config "CONFIG_USB_ETH_RNDIS"
+    ensure_config "CONFIG_USB_ETH_EEM"
+    
+    # Legacy USB Gadget drivers (g_ether, g_serial, etc.)
+    # Legacy USB Gadget drivers (g_ether, g_serial, etc.)
+    # IMPORTANT: These must be MODULES (m) so they don't auto-bind at boot!
+    ensure_config_module "CONFIG_USB_G_SERIAL"
+    ensure_config_module "CONFIG_USB_GADGETFS"
+    ensure_config_module "CONFIG_USB_MASS_STORAGE"
+    ensure_config_module "CONFIG_USB_G_PRINTER"
+    ensure_config_module "CONFIG_USB_CDC_COMPOSITE"
+    ensure_config_module "CONFIG_USB_G_NOKIA"
+    ensure_config_module "CONFIG_USB_G_ACM_MS"
+    ensure_config_module "CONFIG_USB_G_MULTI"
+    ensure_config_module "CONFIG_USB_G_MULTI_RNDIS"
+    ensure_config_module "CONFIG_USB_G_MULTI_CDC"
+    ensure_config_module "CONFIG_USB_G_HID"
+    ensure_config_module "CONFIG_USB_G_WEBCAM"
+    
+    echo "USB Gadget configuration complete."
     echo "Kernel config patched."
 else
     echo "Error: Config file not found at $CONFIG_FILE"
