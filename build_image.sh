@@ -228,6 +228,11 @@ if [ -d "$KERNEL_MODULES_SRC" ]; then
         if [ ! -d "$UBUNTU_BASE/lib/modules/${KERNEL_VERSION}-tag-" ]; then
             echo "Creating symlink for ${KERNEL_VERSION}-tag- -> ${KERNEL_VERSION}..."
             ln -sf "$KERNEL_VERSION" "$UBUNTU_BASE/lib/modules/${KERNEL_VERSION}-tag-"
+            
+            # Regenerate module dependencies for the suffixed kernel version
+            # This is crucial so modprobe can find modules via the symlink
+            echo "Regenerating module dependencies (depmod)..."
+            sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "depmod -a ${KERNEL_VERSION}-tag-"
         fi
     else
         echo "Error: Failed to install modules for $KERNEL_VERSION"
@@ -262,11 +267,12 @@ echo "milkv-duos" | sudo tee "$UBUNTU_BASE/etc/hostname" > /dev/null
 
 # Configure g_ether module auto-loading
 echo "Configuring g_ether module auto-loading..."
-sudo bash -c 'echo "g_ether" > "$UBUNTU_BASE/etc/modules-load.d/g_ether.conf"'
+sudo mkdir -p etc/modules-load.d
+echo "g_ether" | sudo tee etc/modules-load.d/g_ether.conf > /dev/null
 
 # Configure network for RNDIS (USB Ethernet gadget)
-sudo mkdir -p "$UBUNTU_BASE/etc/systemd/network"
-sudo bash -c 'cat > "$UBUNTU_BASE/etc/systemd/network/30-usb0.network" << EOF
+sudo mkdir -p etc/systemd/network
+sudo tee etc/systemd/network/30-usb0.network > /dev/null << 'EOF'
 [Match]
 Name=usb0
 
@@ -277,7 +283,7 @@ DHCPServer=yes
 [DHCPServer]
 PoolOffset=100
 PoolSize=20
-EOF'
+EOF
 
 # Enable networkd
 sudo mkdir -p "$UBUNTU_BASE/etc/systemd/system/multi-user.target.wants"
