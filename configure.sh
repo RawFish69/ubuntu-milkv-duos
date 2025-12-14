@@ -128,7 +128,10 @@ if [ -f "$CONFIG_FILE" ]; then
     ensure_config "CONFIG_USB_MUSB_HDRC"
     ensure_config "CONFIG_USB_MUSB_GADGET"
     ensure_config "CONFIG_USB_MUSB_DUAL_ROLE"
-    
+    # Force DWC2 to Peripheral mode for Gadget operation
+    ensure_config "CONFIG_USB_DWC2"
+    ensure_config "CONFIG_USB_DWC2_PERIPHERAL"
+
     # Composite USB Device support (required for g_multi, etc.)
     ensure_config_module "CONFIG_USB_CONFIGFS"
     ensure_config_module "CONFIG_USB_CONFIGFS_SERIAL"
@@ -168,7 +171,6 @@ if [ -f "$CONFIG_FILE" ]; then
     ensure_config "CONFIG_USB_ETH_RNDIS"
     ensure_config "CONFIG_USB_ETH_EEM"
     
-    # Legacy USB Gadget drivers (g_ether, g_serial, etc.)
     # Legacy USB Gadget drivers (g_ether, g_serial, etc.)
     # IMPORTANT: These must be MODULES (m) so they don't auto-bind at boot!
     ensure_config_module "CONFIG_USB_G_SERIAL"

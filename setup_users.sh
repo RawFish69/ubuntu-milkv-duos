@@ -60,12 +60,21 @@ EOF"
 fi
 
 # Set root password
-echo "Setting root password to 'milkv'..."
-if sudo chroot "$UBUNTU_BASE" /usr/bin/test -x /usr/bin/passwd; then
-    echo "root:milkv" | sudo chroot "$UBUNTU_BASE" /usr/bin/chpasswd
-else
     sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "echo 'root:milkv' | chpasswd"
+# Removed incorrect fi
+
+# Create 'admin' user
+echo "Creating user 'admin'..."
+# Check if user exists (POSIX compliant redirection)
+if ! sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "id -u admin >/dev/null 2>&1"; then
+    sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "useradd -m -s /bin/bash admin"
 fi
+
+# Set password using usermod -p with hash to avoid CHPASSWD/PAM issues in chroot
+# Hash for '69420': $6$D1mL14pctsEZqZwr$apG.RoLxZdHtMK7reySwMpnVPU2u6eWQDaPjlziLePnvkSD6c/ALj32jekRMJg5llRz1odkA5PrRAbCuPr1rr1
+ADMIN_HASH='\$6\$D1mL14pctsEZqZwr\$apG.RoLxZdHtMK7reySwMpnVPU2u6eWQDaPjlziLePnvkSD6c/ALj32jekRMJg5llRz1odkA5PrRAbCuPr1rr1'
+sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "usermod -p '$ADMIN_HASH' admin"
+sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "usermod -aG sudo admin"
 
 # Enable SSH service
 echo "Enabling SSH service..."
@@ -110,12 +119,16 @@ Support: https://github.com/milkv-duo
 
 EOF"
 
-# Cleanup bind mounts
-cd "$SCRIPT_DIR"
-sudo umount -l "$UBUNTU_BASE/tmp" 2>/dev/null || true
-sudo umount -l "$UBUNTU_BASE/sys" 2>/dev/null || true
-sudo umount -l "$UBUNTU_BASE/proc" 2>/dev/null || true
-sudo umount -l "$UBUNTU_BASE/dev" 2>/dev/null || true
+# Cleanup bind mounts (only if not skipped)
+if [ "$SKIP_CLEANUP" != "true" ]; then
+    cd "$SCRIPT_DIR"
+    sudo umount -l "$UBUNTU_BASE/tmp" 2>/dev/null || true
+    sudo umount -l "$UBUNTU_BASE/sys" 2>/dev/null || true
+    sudo umount -l "$UBUNTU_BASE/proc" 2>/dev/null || true
+    sudo umount -l "$UBUNTU_BASE/dev" 2>/dev/null || true
+else
+    echo "Skipping cleanup (handled by caller)..."
+fi
 
 echo ""
 echo "✓ User and SSH configuration complete!"

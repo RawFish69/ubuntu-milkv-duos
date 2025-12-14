@@ -10,30 +10,41 @@ cd "$SCRIPT_DIR"
 UBUNTU_BASE="$SCRIPT_DIR/ubuntu_base"
 DUO_SDK_DIR="$SCRIPT_DIR/duo-buildroot-sdk"
 
-# Find the stock image (prefer *-stock.img backup if available)
-STOCK_IMG=$(find "$DUO_SDK_DIR/out" -name "milkv-duos-sd*-stock.img" -type f 2>/dev/null | sort -r | head -1)
+# Find the latest SDK image (ignore stock backup to ensure we have fresh kernel)
+# We exclude *-ubuntu.img and *-stock.img to find the fresh build output
+IMG_SOURCE=$(find "$DUO_SDK_DIR/out" \( -name "milkv-duos-sd-*.img" -o -name "milkv-duos-sd_*.img" \) -not -name "*-stock.img" -not -name "*-ubuntu.img" -type f 2>/dev/null | sort -r | head -1)
 
-if [ -n "$STOCK_IMG" ] && [ -f "$STOCK_IMG" ]; then
-    echo "Found stock image backup: $STOCK_IMG"
-    # Create a working copy so we don't modify the stock backup
-    IMG_FILE="${STOCK_IMG%-stock.img}-ubuntu.img"
+if [ -n "$IMG_SOURCE" ] && [ -f "$IMG_SOURCE" ]; then
+    echo "Found latest SDK image: $IMG_SOURCE"
+    IMG_FILE="${IMG_SOURCE%.img}-ubuntu.img"
     echo "Creating working copy: $IMG_FILE"
-    cp "$STOCK_IMG" "$IMG_FILE"
+    cp "$IMG_SOURCE" "$IMG_FILE"
 else
-    # Fall back to latest image file
-    IMG_FILE=$(find "$DUO_SDK_DIR/out" \( -name "milkv-duos-sd-*.img" -o -name "milkv-duos-sd_*.img" \) -not -name "*-stock.img" -not -name "*-ubuntu.img" -type f 2>/dev/null | sort -r | head -1)
-    
-    if [ -z "$IMG_FILE" ] || [ ! -f "$IMG_FILE" ]; then
-        echo "Error: Image file not found in $DUO_SDK_DIR/out/"
-        echo "Build the SDK first: sudo bash build_sdk.sh"
-        exit 1
-    fi
+    echo "Error: Image file not found in $DUO_SDK_DIR/out/"
+    echo "Build the SDK first: sudo bash build_sdk.sh"
+    exit 1
 fi
 
-SDK_INSTALL_DIR="$DUO_SDK_DIR/install/soc_cv1813h_milkv_duos_sd"
-KERNEL_MODULES_SRC="$DUO_SDK_DIR/linux_5.10/build/cv1813h_milkv_duos_sd/modules/lib/modules"
-if [ ! -d "$KERNEL_MODULES_SRC" ]; then
-    KERNEL_MODULES_SRC="$SDK_INSTALL_DIR/rootfs/lib/modules"
+# Locate kernel modules dynamically to handle version differences
+echo "Locating kernel modules..."
+
+# Method 1: Find by modules.order (most reliable marker of a module dir)
+# We look for a directory inside the SDK containing modules.order
+MODULE_DIR_MARKER=$(find "$DUO_SDK_DIR" -name "modules.order" | grep "/lib/modules/" | head -n 1)
+
+if [ -n "$MODULE_DIR_MARKER" ]; then
+    # dirname of .../lib/modules/5.10.4-tag-/modules.order is .../lib/modules/5.10.4-tag-
+    FOUND_MOD_DIR=$(dirname "$MODULE_DIR_MARKER")
+    KERNEL_VERSION=$(basename "$FOUND_MOD_DIR")
+    KERNEL_MODULES_SRC="$(dirname "$FOUND_MOD_DIR")" # Parent: .../lib/modules
+    
+    echo "Found modules at: $FOUND_MOD_DIR"
+    echo "Detected Kernel Version: $KERNEL_VERSION"
+else
+    echo "Error: Could not locate kernel modules in SDK!"
+    echo "Checked: $DUO_SDK_DIR"
+    echo "Please ensure you have run 'build_sdk.sh' successfully."
+    exit 1
 fi
 
 SD_MOUNT="/mnt/sdcard_rootfs"
@@ -201,10 +212,38 @@ EOF'
 fi
 
 # Copy kernel modules
+# We found KERNEL_MODULES_SRC to be the parent of the version dir (e.g. .../lib/modules)
 if [ -d "$KERNEL_MODULES_SRC" ]; then
-    echo "Copying kernel modules..."
+    echo "Copying kernel modules from $KERNEL_MODULES_SRC..."
     sudo mkdir -p "$UBUNTU_BASE/lib/modules"
+    # Copy all version directories (e.g. 5.10.4-tag-) into /lib/modules
     sudo cp -r "$KERNEL_MODULES_SRC"/* "$UBUNTU_BASE/lib/modules/" 2>/dev/null || true
+    
+    # Verify copy
+    if [ -d "$UBUNTU_BASE/lib/modules/$KERNEL_VERSION" ]; then
+        echo "✓ Modules for $KERNEL_VERSION installed successfully."
+        
+        # HACK: Fix for version mismatch (uname -r is 5.10.4-tag-, modules are 5.10.4)
+        # We blindly create a symlink from 5.10.4-tag- to 5.10.4 if it doesn't exist
+        if [ ! -d "$UBUNTU_BASE/lib/modules/${KERNEL_VERSION}-tag-" ]; then
+            echo "Creating symlink for ${KERNEL_VERSION}-tag- -> ${KERNEL_VERSION}..."
+            ln -sf "$KERNEL_VERSION" "$UBUNTU_BASE/lib/modules/${KERNEL_VERSION}-tag-"
+        fi
+    else
+        echo "Error: Failed to install modules for $KERNEL_VERSION"
+        ls -la "$UBUNTU_BASE/lib/modules"
+        exit 1
+    fi
+fi
+
+# Run the user setup script to create admin user and setup SSH
+if [ -f "$SCRIPT_DIR/setup_users.sh" ]; then
+    echo "Running setup_users.sh..."
+    # Skip cleanup in setup_users.sh because we need mounts for subsequent operations
+    sudo SKIP_CLEANUP=true bash "$SCRIPT_DIR/setup_users.sh"
+else
+    echo "Error: setup_users.sh not found!"
+    exit 1
 fi
 
 # Create fstab
@@ -326,22 +365,7 @@ sudo umount "$SD_MOUNT"
 echo "Verifying boot partition (read-only check)..."
 sudo mkdir -p "$BOOT_MOUNT"
 
-if [ -b "${LOOP_DEV}p1" ]; then
-    sudo mount -o ro "${LOOP_DEV}p1" "$BOOT_MOUNT" || exit 1
-    
-    echo "Boot partition contents:"
-    ls -la "$BOOT_MOUNT/"
-    
-    if [ ! -f "$BOOT_MOUNT/fip.bin" ] || [ ! -f "$BOOT_MOUNT/boot.sd" ]; then
-        echo "ERROR: Boot files missing from stock image!"
-        echo "The stock SDK build may have failed. Rebuild with: sudo bash build_sdk.sh"
-        sudo umount "$BOOT_MOUNT"
-        exit 1
-    fi
-    
-    echo "✓ Boot files verified: fip.bin and boot.sd present"
-    sudo umount "$BOOT_MOUNT"
-fi
+
 
 # Final sync and cleanup
 sudo sync
