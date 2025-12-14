@@ -1,153 +1,159 @@
 name: Build Milk-V Duo S Ubuntu Image
 
 on:
-  # Auto-run on push/PR for quick validation
-  push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
-  # Allow manual full builds
   workflow_dispatch:
     inputs:
-      build_full_image:
-        description: 'Build full Ubuntu image (otherwise just validate setup)'
-        required: false
-        type: boolean
-        default: false
+      build_type:
+        description: "What to run"
+        required: true
+        type: choice
+        default: setup_check
+        options:
+          - setup_check          # deps + configure only
+          - sdk_only             # deps + configure + build SDK
+          - systemd_only         # deps + configure + install systemd (no SDK build)
+          - image_only           # deps + configure + build image (assumes SDK outputs already exist)
+          - full                 # deps + configure + build SDK + systemd + image
+      cleanup_level:
+        description: "How aggressively to free disk (full/sdk runs)"
+        required: true
+        type: choice
+        default: intermediate
+        options:
+          - none
+          - intermediate         # remove buildroot dl/ + output/build/
+          - aggressive           # remove big SDK source trees after SDK build
+
+concurrency:
+  group: milkv-duos-image-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 350
+    env:
+      DEBIAN_FRONTEND: noninteractive
+
     steps:
-    - name: Maximize build space
-      # Only maximize space for full builds (expensive operation)
-      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
-      uses: easimon/maximize-build-space@master
-      with:
-        root-reserve-mb: 2048
-        swap-size-mb: 2048
-        remove-dotnet: 'true'
-        remove-android: 'true'
-        remove-haskell: 'true'
-        remove-codeql: 'true'
-        remove-docker-images: 'true'
-        
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Maximize build space (full / sdk / image)
+        if: inputs.build_type != 'setup_check'
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 4096
+          swap-size-mb: 2048
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
+          remove-docker-images: "true"
 
-    - name: Check initial disk space
-      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
-      run: |
-        echo "=== Initial Disk Space ==="
-        df -h
-        echo "=========================="
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Cache SDK and Tools
-      id: cache-sdk
-      uses: actions/cache@v4
-      with:
-        path: |
-          duo-buildroot-sdk/host-tools
-          duo-buildroot-sdk/buildroot-2021.05/output/host
-          duo-buildroot-sdk/install
-        # Exclude massive intermediate directories:
-        # - dl/ contains downloaded source tarballs (~5-10GB)
-        # - output/build/ contains object files (~10-15GB)
-        key: ${{ runner.os }}-sdk-optimized-${{ hashFiles('configure.sh') }}
-        restore-keys: |
-          ${{ runner.os }}-sdk-optimized-
+      - name: Make scripts executable
+        run: |
+          chmod +x ./*.sh || true
+          ls -la ./*.sh || true
 
-    - name: Install Dependencies
-      run: |
-        sudo bash install_dependencies.sh
+      - name: Disk space (start)
+        run: df -h
 
-    - name: Configure Environment
-      # Clones SDK, patches kernel config, downloads Ubuntu Base
-      run: |
-        bash configure.sh
+      # Optional: cache only for non-aggressive modes (aggressive deletes most cached paths anyway)
+      - name: Cache SDK host tools + ubuntu_base (optional)
+        if: inputs.cleanup_level != 'aggressive'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ubuntu_base
+            duo-buildroot-sdk/host-tools
+            duo-buildroot-sdk/buildroot-2021.05/output/host
+            duo-buildroot-sdk/install
+          key: ${{ runner.os }}-milkv-duos-${{ hashFiles('install_dependencies.sh', 'configure.sh', 'build_sdk.sh', 'install_systemd.sh', 'build_image.sh', 'setup_users.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-milkv-duos-
 
-    - name: Check disk space after configure
-      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
-      run: |
-        echo "=== Disk Space After Configure ==="
-        df -h
-        echo "==================================="
+      - name: Install Dependencies
+        run: |
+          sudo bash ./install_dependencies.sh
 
-    # Full build steps (only run on manual trigger with flag)
-    - name: Build SDK
-      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
-      # This takes the longest time. 
-      # build_sdk.sh calls the SDK's build.sh wrapper
-      run: |
-        sudo bash build_sdk.sh
+      - name: Configure Environment
+        # clones SDK, patches configs, downloads ubuntu base
+        run: |
+          bash ./configure.sh
 
-    - name: Check disk space after SDK build
-      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
-      run: |
-        echo "=== Disk Space After SDK Build ==="
-        df -h
-        echo "==================================="
+      - name: Cleanup after configure (remove ubuntu base tarball)
+        run: |
+          # saves a few hundred MB; safe to re-download if needed
+          sudo rm -f ubuntu_base/ubuntu-base-*.tar.gz || true
+          df -h
 
-    - name: Clean buildroot intermediate files
-      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
-      run: |
-        echo "=== Cleaning Buildroot Intermediate Files ==="
-        # Remove downloaded source tarballs (can be re-downloaded if needed)
-        if [ -d "duo-buildroot-sdk/buildroot-2021.05/dl" ]; then
-          echo "Removing dl/ directory..."
-          sudo rm -rf duo-buildroot-sdk/buildroot-2021.05/dl
-        fi
-        # Remove build intermediates (object files, etc.)
-        if [ -d "duo-buildroot-sdk/buildroot-2021.05/output/build" ]; then
-          echo "Removing output/build/ directory..."
-          sudo rm -rf duo-buildroot-sdk/buildroot-2021.05/output/build
-        fi
-        # Keep output/images (kernel, bootloader) and output/host (toolchain)
-        echo "=== Cleanup Complete ==="
-        df -h
-        echo "========================="
+      # --------------------
+      # SDK build
+      # --------------------
+      - name: Build SDK
+        if: inputs.build_type == 'sdk_only' || inputs.build_type == 'full'
+        run: |
+          # your build_sdk.sh runs the SDK build wrapper
+          bash ./build_sdk.sh
 
-    - name: Install Systemd
-      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
-      # Prepares the Ubuntu rootfs with QEMU and installs systemd
-      run: |
-        sudo bash install_systemd.sh
+      - name: Clean buildroot intermediates (saves lots of space)
+        if: (inputs.build_type == 'sdk_only' || inputs.build_type == 'full') && inputs.cleanup_level != 'none'
+        run: |
+          echo "=== Cleanup level: ${{ inputs.cleanup_level }} ==="
+          df -h
 
-    - name: Check disk space after systemd install
-      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
-      run: |
-        echo "=== Disk Space After Systemd Install ==="
-        # Wait for any pending unmounts to complete
-        sync
-        sleep 2
-        df -h || echo "Warning: df command failed, but continuing..."
-        echo "========================================="
+          if [ "${{ inputs.cleanup_level }}" = "intermediate" ] || [ "${{ inputs.cleanup_level }}" = "aggressive" ]; then
+            # keep output/host toolchain + output/images, remove heavy intermediates
+            sudo rm -rf duo-buildroot-sdk/buildroot-2021.05/dl || true
+            sudo rm -rf duo-buildroot-sdk/buildroot-2021.05/output/build || true
+          fi
 
-    - name: Build Final Image
-      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
-      # Combines SDK kernel/bootloader with Ubuntu rootfs
-      run: |
-        # Set a slightly larger image size for CI to be safe
-        export IMAGE_SIZE_MB=3072
-        sudo bash build_image.sh
+          if [ "${{ inputs.cleanup_level }}" = "aggressive" ]; then
+            # WARNING: only do this if later steps do NOT need these trees.
+            # systemd/image steps mainly need: duo-buildroot-sdk/out + duo-buildroot-sdk/install
+            sudo rm -rf duo-buildroot-sdk/buildroot-2021.05 || true
+            sudo rm -rf duo-buildroot-sdk/linux_5.10 || true
+            sudo rm -rf duo-buildroot-sdk/u-boot-2021.10 || true
+            sudo rm -rf duo-buildroot-sdk/opensbi || true
+            sudo rm -rf duo-buildroot-sdk/freertos || true
+            sudo rm -rf duo-buildroot-sdk/fsbl || true
 
-    - name: Final disk space report
-      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
-      run: |
-        echo "=== Final Disk Space ==="
-        # Wait for any pending unmounts from build_image.sh to complete
-        sync
-        sleep 2
-        df -h || echo "Warning: df command failed, but build completed successfully"
-        echo "========================"
+            sudo apt-get clean
+            sudo apt-get autoremove -y
+            sudo rm -rf /tmp/* /var/tmp/* || true
+          fi
 
-    - name: Upload Image Artifact
-      if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_full_image == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: milkv-duos-ubuntu-image
-        path: |
-          duo-buildroot-sdk/out/*.img
-          !duo-buildroot-sdk/out/*-stock.img
-        if-no-files-found: error
+          df -h
+
+      # --------------------
+      # systemd rootfs prep
+      # --------------------
+      - name: Install Systemd into ubuntu_base (QEMU chroot)
+        if: inputs.build_type == 'systemd_only' || inputs.build_type == 'full'
+        run: |
+          sudo bash ./install_systemd.sh
+
+      # --------------------
+      # image build
+      # --------------------
+      - name: Build Final Image
+        if: inputs.build_type == 'image_only' || inputs.build_type == 'full'
+        run: |
+          # build_image.sh uses loop devices/mounts; keep env if you add any later
+          sudo -E bash ./build_image.sh
+
+      - name: Final disk space
+        run: |
+          sync
+          sleep 2
+          df -h || true
+
+      - name: Upload Image Artifact
+        if: inputs.build_type == 'image_only' || inputs.build_type == 'full'
+        uses: actions/upload-artifact@v4
+        with:
+          name: milkv-duos-ubuntu-image
+          path: |
+            duo-buildroot-sdk/out/*-ubuntu.img
+          if-no-files-found: error
