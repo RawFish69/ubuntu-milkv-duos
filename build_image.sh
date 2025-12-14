@@ -258,12 +258,52 @@ tmpfs           /tmp            tmpfs   defaults          0       0
 tmpfs           /var/tmp        tmpfs   defaults          0       0
 EOF"
 
+# Install essential packages missing from minimal base
+echo "Installing additional packages (fdisk, usbutils)..."
+# We need to temporarily resolve DNS to install packages
+sudo cp /etc/resolv.conf "$UBUNTU_BASE/etc/resolv.conf"
+sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "apt-get update && apt-get install -y fdisk usbutils"
+# Restore minimal resolv.conf
+sudo bash -c 'echo "nameserver 8.8.8.8" > "$UBUNTU_BASE/etc/resolv.conf"'
+
 # Set root password and configure system
 echo "Configuring Ubuntu system..."
 sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "echo 'root:milkv' | chpasswd" 2>/dev/null || true
 
 # Set hostname
 echo "milkv-duos" | sudo tee "$UBUNTU_BASE/etc/hostname" > /dev/null
+
+# Create a robust USB gadget fix script
+# This ensures modules are loaded even if build-time depmod failed
+echo "Creating USB gadget fix script..."
+sudo tee "$UBUNTU_BASE/usr/local/bin/fix-usb-gadget.sh" > /dev/null << 'EOF'
+#!/bin/bash
+# Force regenerate module dependencies
+depmod -a
+# Try to load g_ether explicitly
+modprobe g_ether
+# Ensure network is up
+ip link set usb0 up
+EOF
+sudo chmod +x "$UBUNTU_BASE/usr/local/bin/fix-usb-gadget.sh"
+
+# Create service for it
+sudo tee "$UBUNTU_BASE/etc/systemd/system/usb-gadget-fix.service" > /dev/null << 'EOF'
+[Unit]
+Description=Fix USB Gadget Modules
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/fix-usb-gadget.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable the service
+sudo ln -sf /etc/systemd/system/usb-gadget-fix.service "$UBUNTU_BASE/etc/systemd/system/multi-user.target.wants/usb-gadget-fix.service"
 
 # Configure g_ether module auto-loading
 echo "Configuring g_ether module auto-loading..."
