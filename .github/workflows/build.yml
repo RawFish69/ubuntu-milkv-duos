@@ -77,7 +77,7 @@ jobs:
         run: |
           sudo bash ./install_dependencies.sh
 
-      - name: Configure Environment
+      - name: Clean apt cache after dependencies`n        run: |`n          sudo apt-get clean`n          sudo rm -rf /var/lib/apt/lists/* || true`n          df -h`n`n      - name: Configure Environment
         # clones SDK, patches configs, downloads ubuntu base
         run: |
           bash ./configure.sh
