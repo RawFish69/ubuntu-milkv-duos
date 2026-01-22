@@ -103,4 +103,3 @@ echo ""
 echo "You can now proceed with the build:"
 echo "  bash build_sdk.sh"
 echo ""
-

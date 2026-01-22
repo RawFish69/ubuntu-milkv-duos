@@ -124,6 +124,25 @@ else
     exit 1
 fi
 
+# Install USB gadget configfs service + network configs
+GADGET_SRC_DIR="$SCRIPT_DIR/systemd"
+if [ -d "$GADGET_SRC_DIR" ]; then
+    echo "Installing USB gadget systemd unit..."
+    sudo mkdir -p "$UBUNTU_BASE/usr/local/sbin"
+    sudo mkdir -p "$UBUNTU_BASE/etc/systemd/system"
+    sudo mkdir -p "$UBUNTU_BASE/etc/systemd/network"
+
+    sudo cp "$GADGET_SRC_DIR/usb-gadget.sh" "$UBUNTU_BASE/usr/local/sbin/usb-gadget.sh"
+    sudo chmod 0755 "$UBUNTU_BASE/usr/local/sbin/usb-gadget.sh"
+    sudo cp "$GADGET_SRC_DIR/usb-gadget.service" "$UBUNTU_BASE/etc/systemd/system/usb-gadget.service"
+    sudo cp "$GADGET_SRC_DIR/usb-ecm.network" "$UBUNTU_BASE/etc/systemd/network/10-usb-ecm.network"
+    sudo cp "$GADGET_SRC_DIR/usb-rndis.network" "$UBUNTU_BASE/etc/systemd/network/10-usb-rndis.network"
+
+    sudo systemctl --root "$UBUNTU_BASE" enable usb-gadget.service systemd-networkd || true
+else
+    echo "USB gadget systemd files not found at $GADGET_SRC_DIR"
+fi
+
 # Cleanup
 sudo umount -l dev/random 2>/dev/null || true
 sudo umount -l dev proc sys tmp 2>/dev/null || true

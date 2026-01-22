@@ -60,6 +60,19 @@ if [ -f "$CONFIG_FILE" ]; then
         fi
     }
 
+    # Helper to set a config value (strings/numbers) exactly
+    ensure_config_value() {
+        local key="$1"
+        local value="$2"
+        if grep -q "^${key}=" "$CONFIG_FILE"; then
+            echo "  Updating ${key}=${value}"
+            sed -i "s|^${key}=.*|${key}=${value}|" "$CONFIG_FILE"
+        else
+            echo "  Adding ${key}=${value}"
+            echo "${key}=${value}" >> "$CONFIG_FILE"
+        fi
+    }
+
     # Basic systemd requirements
     ensure_config "CONFIG_CGROUPS"
     ensure_config "CONFIG_NAMESPACES"
@@ -125,43 +138,23 @@ if [ -f "$CONFIG_FILE" ]; then
     ensure_config "CONFIG_USB_GADGET_VBUS_DRAW"
     
     # USB Gadget controller drivers (platform-specific)
-    ensure_config "CONFIG_USB_MUSB_HDRC"
-    ensure_config "CONFIG_USB_MUSB_GADGET"
-    ensure_config "CONFIG_USB_MUSB_DUAL_ROLE"
-    # Force DWC2 to Peripheral mode for Gadget operation
+    # Milk-V DuoS uses DWC2 at 4340000.usb in device mode
     ensure_config "CONFIG_USB_DWC2"
     ensure_config "CONFIG_USB_DWC2_PERIPHERAL"
 
-    # Composite USB Device support (required for g_multi, etc.)
-    ensure_config_module "CONFIG_USB_CONFIGFS"
-    ensure_config_module "CONFIG_USB_CONFIGFS_SERIAL"
-    ensure_config_module "CONFIG_USB_CONFIGFS_ACM"
-    ensure_config_module "CONFIG_USB_CONFIGFS_OBEX"
-    ensure_config_module "CONFIG_USB_CONFIGFS_NCM"
+    # ConfigFS gadget framework (required for modern gadgets)
+    ensure_config "CONFIG_CONFIGFS_FS"
+    ensure_config "CONFIG_USB_CONFIGFS"
     ensure_config_module "CONFIG_USB_CONFIGFS_ECM"
-    ensure_config_module "CONFIG_USB_CONFIGFS_ECM_SUBSET"
     ensure_config_module "CONFIG_USB_CONFIGFS_RNDIS"
-    ensure_config_module "CONFIG_USB_CONFIGFS_EEM"
-    ensure_config_module "CONFIG_USB_CONFIGFS_MASS_STORAGE"
-    ensure_config_module "CONFIG_USB_CONFIGFS_F_FS"
     
-    # USB Gadget function drivers
+    # Core gadget function drivers (needed by g_ether and configfs functions)
     ensure_config_module "CONFIG_USB_LIBCOMPOSITE"
-    ensure_config_module "CONFIG_USB_F_ACM"
-    ensure_config_module "CONFIG_USB_F_SS_LB"
-    ensure_config_module "CONFIG_USB_U_SERIAL"
     ensure_config_module "CONFIG_USB_U_ETHER"
-    ensure_config_module "CONFIG_USB_F_SERIAL"
-    ensure_config_module "CONFIG_USB_F_OBEX"
-    ensure_config_module "CONFIG_USB_F_NCM"
     ensure_config_module "CONFIG_USB_F_ECM"
-    ensure_config_module "CONFIG_USB_F_EEM"
-    ensure_config_module "CONFIG_USB_F_SUBSET"
     ensure_config_module "CONFIG_USB_F_RNDIS"
-    ensure_config_module "CONFIG_USB_F_MASS_STORAGE"
-    ensure_config_module "CONFIG_USB_F_FS"
     
-    # USB Ethernet Gadget drivers (g_ether module)
+    # USB Ethernet Gadget drivers (legacy g_ether module)
     # CONFIG_USB_ETH=m builds the g_ether.ko kernel module which provides
     # RNDIS/ECM USB Ethernet gadget functionality for USB-C OTG networking.
     # This enables the usb0 interface (192.168.42.1) when the board is plugged
@@ -171,20 +164,13 @@ if [ -f "$CONFIG_FILE" ]; then
     ensure_config "CONFIG_USB_ETH_RNDIS"
     ensure_config "CONFIG_USB_ETH_EEM"
     
-    # Legacy USB Gadget drivers (g_ether, g_serial, etc.)
-    # IMPORTANT: These must be MODULES (m) so they don't auto-bind at boot!
-    ensure_config_module "CONFIG_USB_G_SERIAL"
-    ensure_config_module "CONFIG_USB_GADGETFS"
-    ensure_config_module "CONFIG_USB_MASS_STORAGE"
-    ensure_config_module "CONFIG_USB_G_PRINTER"
-    ensure_config_module "CONFIG_USB_CDC_COMPOSITE"
-    ensure_config_module "CONFIG_USB_G_NOKIA"
-    ensure_config_module "CONFIG_USB_G_ACM_MS"
-    ensure_config_module "CONFIG_USB_G_MULTI"
-    ensure_config_module "CONFIG_USB_G_MULTI_RNDIS"
-    ensure_config_module "CONFIG_USB_G_MULTI_CDC"
-    ensure_config_module "CONFIG_USB_G_HID"
-    ensure_config_module "CONFIG_USB_G_WEBCAM"
+    # Localversion: keep kernelrelease + module vermagic aligned
+    # Match the Milk-V DuoS release suffix: "5.10.4-tag-"
+    ensure_config_value "CONFIG_LOCALVERSION" "\"-tag-\""
+    if grep -q "^CONFIG_LOCALVERSION_AUTO=y" "$CONFIG_FILE"; then
+        echo "  Disabling CONFIG_LOCALVERSION_AUTO"
+        sed -i "s/^CONFIG_LOCALVERSION_AUTO=y/# CONFIG_LOCALVERSION_AUTO is not set/" "$CONFIG_FILE"
+    fi
     
     echo "USB Gadget configuration complete."
     echo "Kernel config patched."

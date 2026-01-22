@@ -76,6 +76,17 @@ ADMIN_HASH='\$6\$D1mL14pctsEZqZwr\$apG.RoLxZdHtMK7reySwMpnVPU2u6eWQDaPjlziLePnvk
 sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "usermod -p '$ADMIN_HASH' admin"
 sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "usermod -aG sudo admin"
 
+# Create 'ubuntu' user (default Ubuntu user)
+echo "Creating user 'ubuntu'..."
+if ! sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "id -u ubuntu >/dev/null 2>&1"; then
+    sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "useradd -m -s /bin/bash ubuntu"
+fi
+
+# Set ubuntu password to 'milkv'
+echo "Setting ubuntu user password to 'milkv'..."
+sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "echo 'ubuntu:milkv' | chpasswd"
+sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "usermod -aG sudo ubuntu"
+
 # Enable SSH service
 echo "Enabling SSH service..."
 sudo mkdir -p "$UBUNTU_BASE/etc/systemd/system/multi-user.target.wants"
@@ -133,5 +144,8 @@ fi
 echo ""
 echo "✓ User and SSH configuration complete!"
 echo "  Root password: milkv"
+echo "  Ubuntu user: ubuntu (password: milkv)"
 echo "  SSH: Enabled on boot"
+echo "  USB Gadget IP: 192.168.42.1"
+echo "  Connect via: ssh ubuntu@192.168.42.1"
 echo ""

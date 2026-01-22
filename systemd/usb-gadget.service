@@ -1,0 +1,14 @@
+[Unit]
+Description=USB Gadget (ECM+RNDIS) via configfs
+After=systemd-modules-load.service local-fs.target
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/usb-gadget.sh start
+ExecStop=/usr/local/sbin/usb-gadget.sh stop
+
+[Install]
+WantedBy=multi-user.target
