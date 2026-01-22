@@ -77,15 +77,32 @@ jobs:
         run: |
           sudo bash ./install_dependencies.sh
 
-      - name: Clean apt cache after dependencies`n        run: |`n          sudo apt-get clean`n          sudo rm -rf /var/lib/apt/lists/* || true`n          df -h`n`n      - name: Configure Environment
+      - name: Clean apt cache after dependencies
+        run: |
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/* || true
+          df -h
+
+      - name: Configure Environment
         # clones SDK, patches configs, downloads ubuntu base
         run: |
           bash ./configure.sh
 
-      - name: Cleanup after configure (remove ubuntu base tarball)
+      - name: Cleanup after configure
         run: |
-          # saves a few hundred MB; safe to re-download if needed
+          # Remove ubuntu base tarball (saves a few hundred MB)
           sudo rm -f ubuntu_base/ubuntu-base-*.tar.gz || true
+          
+          # Remove SDK git history to save space (if not needed for later steps)
+          if [ -d "duo-buildroot-sdk/.git" ]; then
+            sudo rm -rf duo-buildroot-sdk/.git || true
+            echo "Removed SDK .git directory to save space"
+          fi
+          
+          # Clean up any temporary files
+          sudo find . -type f -name "*.tmp" -delete || true
+          sudo find . -type f -name "*.log" -delete || true
+          
           df -h
 
       # --------------------
@@ -107,6 +124,11 @@ jobs:
             # keep output/host toolchain + output/images, remove heavy intermediates
             sudo rm -rf duo-buildroot-sdk/buildroot-2021.05/dl || true
             sudo rm -rf duo-buildroot-sdk/buildroot-2021.05/output/build || true
+            
+            # Remove build logs and temporary files
+            sudo find duo-buildroot-sdk -type f -name "*.log" -delete || true
+            sudo find duo-buildroot-sdk -type f -name "*.tmp" -delete || true
+            sudo find duo-buildroot-sdk -type d -name ".git" -exec rm -rf {} + || true
           fi
 
           if [ "${{ inputs.cleanup_level }}" = "aggressive" ]; then
@@ -122,6 +144,7 @@ jobs:
             sudo apt-get clean
             sudo apt-get autoremove -y
             sudo rm -rf /tmp/* /var/tmp/* || true
+            sudo rm -rf /var/cache/apt/archives/* || true
           fi
 
           df -h
@@ -134,6 +157,42 @@ jobs:
         run: |
           sudo bash ./install_systemd.sh
 
+      - name: Cleanup after systemd installation
+        if: inputs.build_type == 'systemd_only' || inputs.build_type == 'full'
+        run: |
+          # Clean apt cache inside ubuntu_base
+          sudo chroot ubuntu_base apt-get clean || true
+          sudo rm -rf ubuntu_base/var/lib/apt/lists/* || true
+          sudo rm -rf ubuntu_base/var/cache/apt/archives/* || true
+          
+          # Remove documentation and man pages to save space (optional but saves ~100MB+)
+          sudo find ubuntu_base/usr/share/doc -type f ! -name "copyright" -delete || true
+          sudo find ubuntu_base/usr/share/man -type f -delete || true
+          sudo find ubuntu_base/usr/share/info -type f -delete || true
+          
+          # Remove locale files except en_US (saves ~50MB+)
+          sudo find ubuntu_base/usr/share/locale -mindepth 1 -maxdepth 1 ! -name "en_US*" -exec rm -rf {} + || true
+          
+          # Clean temporary files
+          sudo rm -rf ubuntu_base/tmp/* || true
+          sudo rm -rf ubuntu_base/var/tmp/* || true
+          
+          df -h
+
+      - name: Setup Users
+        if: inputs.build_type == 'systemd_only' || inputs.build_type == 'full'
+        run: |
+          sudo bash ./setup_users.sh
+
+      - name: Cleanup after user setup
+        if: inputs.build_type == 'systemd_only' || inputs.build_type == 'full'
+        run: |
+          # Clean any remaining temporary files
+          sudo rm -rf ubuntu_base/tmp/* || true
+          sudo rm -rf ubuntu_base/var/tmp/* || true
+          sudo find ubuntu_base -type f -name "*.log" -delete || true
+          df -h
+
       # --------------------
       # image build
       # --------------------
@@ -143,11 +202,28 @@ jobs:
           # build_image.sh uses loop devices/mounts; keep env if you add any later
           sudo -E bash ./build_image.sh
 
+      - name: Cleanup after image build
+        if: inputs.build_type == 'image_only' || inputs.build_type == 'full'
+        run: |
+          # Clean up any loop devices that might still be attached
+          sudo losetup -D || true
+          sudo umount /mnt/sdcard_rootfs 2>/dev/null || true
+          sudo umount /mnt/sdcard_boot 2>/dev/null || true
+          
+          # Remove intermediate image files (keep only final -ubuntu.img)
+          sudo find duo-buildroot-sdk/out -name "*.img" ! -name "*-ubuntu.img" -delete || true
+          sudo find duo-buildroot-sdk/out -name "*.img.backup" -delete || true
+          
+          # Clean up any build artifacts
+          sudo rm -rf /tmp/* /var/tmp/* || true
+          df -h
+
       - name: Final disk space
         run: |
           sync
           sleep 2
           df -h || true
+          du -sh duo-buildroot-sdk/out/*.img 2>/dev/null || true
 
       - name: Upload Image Artifact
         if: inputs.build_type == 'image_only' || inputs.build_type == 'full'
@@ -157,3 +233,4 @@ jobs:
           path: |
             duo-buildroot-sdk/out/*-ubuntu.img
           if-no-files-found: error
+          retention-days: 7
