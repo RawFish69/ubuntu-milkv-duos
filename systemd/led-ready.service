@@ -1,0 +1,14 @@
+[Unit]
+Description=Ready LED Blink (USB Gadget)
+After=usb-gadget.service systemd-networkd.service
+Wants=usb-gadget.service
+ConditionPathExists=/sys/class/gpio
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/led-ready.sh
+Restart=always
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target

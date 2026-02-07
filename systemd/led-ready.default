@@ -1,0 +1,5 @@
+# Optional overrides for led-ready.sh
+# LED_PIN=509
+# INTERVAL=0.5
+# READY_IFACE=usb0
+# READY_WAIT_SEC=120

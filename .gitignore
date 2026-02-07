@@ -1,5 +1,6 @@
 # SDK and Build Dependencies (created by configure.sh)
 duo-buildroot-sdk/
+duo-buildroot-sdk-v2/
 ubuntu_base/
 
 # Build Artifacts

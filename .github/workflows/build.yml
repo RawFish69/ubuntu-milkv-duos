@@ -1,42 +1,51 @@
+# OS-image-builder: Milk-V Duo S Ubuntu Base image
+# Builds Ubuntu 22.04 ARM64 rootfs and packs it into an SD card image using duo-buildroot-sdk-v2.
+
 name: Build Milk-V Duo S Ubuntu Image
 
 on:
   workflow_dispatch:
     inputs:
       build_type:
-        description: "What to run"
+        description: "Build stage to run"
         required: true
         type: choice
-        default: setup_check
+        default: full
         options:
-          - setup_check          # deps + configure only
-          - sdk_only             # deps + configure + build SDK
-          - systemd_only         # deps + configure + install systemd (no SDK build)
-          - image_only           # deps + configure + build image (assumes SDK outputs already exist)
-          - full                 # deps + configure + build SDK + systemd + image
+          - setup_check          # Install deps + configure only (fast sanity check)
+          - sdk_only             # Through SDK build (kernel/uboot)
+          - systemd_only         # Configure + systemd + users (no SDK; needs existing ubuntu_base)
+          - image_only           # Pack image only (needs SDK out/ + prepared ubuntu_base)
+          - full                 # Full pipeline: SDK + systemd + users + image
       cleanup_level:
-        description: "How aggressively to free disk (full/sdk runs)"
+        description: "Free disk during/after SDK build"
         required: true
         type: choice
         default: intermediate
         options:
-          - none
-          - intermediate         # remove buildroot dl/ + output/build/
-          - aggressive           # remove big SDK source trees after SDK build
+          - none                 # Keep all build intermediates
+          - intermediate         # Remove dl/ and output/build/ to save space
+          - aggressive           # Remove large SDK trees after SDK build (image step needs out/ + install)
+      artifact_retention_days:
+        description: "Days to keep the image artifact"
+        required: false
+        type: number
+        default: 7
 
 concurrency:
-  group: milkv-duos-image-${{ github.ref }}
+  group: os-image-builder-${{ github.repository }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
+    name: Build Ubuntu image
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 360
     env:
       DEBIAN_FRONTEND: noninteractive
 
     steps:
-      - name: Maximize build space (full / sdk / image)
+      - name: Maximize build space
         if: inputs.build_type != 'setup_check'
         uses: easimon/maximize-build-space@master
         with:
@@ -53,184 +62,162 @@ jobs:
 
       - name: Make scripts executable
         run: |
-          chmod +x ./*.sh || true
-          ls -la ./*.sh || true
+          chmod +x ./*.sh 2>/dev/null || true
+          chmod +x tools/python 2>/dev/null || true
+          ls -la ./*.sh 2>/dev/null || true
 
       - name: Disk space (start)
         run: df -h
 
-      # Optional: cache only for non-aggressive modes (aggressive deletes most cached paths anyway)
-      - name: Cache SDK host tools + ubuntu_base (optional)
+      - name: Cache SDK and ubuntu_base
         if: inputs.cleanup_level != 'aggressive'
         uses: actions/cache@v4
         with:
           path: |
             ubuntu_base
-            duo-buildroot-sdk/host-tools
-            duo-buildroot-sdk/buildroot-2021.05/output/host
-            duo-buildroot-sdk/install
-          key: ${{ runner.os }}-milkv-duos-${{ hashFiles('install_dependencies.sh', 'configure.sh', 'build_sdk.sh', 'install_systemd.sh', 'build_image.sh', 'setup_users.sh') }}
+            duo-buildroot-sdk-v2/host-tools
+            duo-buildroot-sdk-v2/build/boards
+            duo-buildroot-sdk-v2/install
+          key: ${{ runner.os }}-os-image-builder-${{ hashFiles('install_dependencies.sh', 'configure.sh', 'build_sdk.sh', 'install_systemd.sh', 'build_image.sh', 'setup_users.sh', 'patch_sdk.sh', 'patch_wifi_dts.sh') }}
           restore-keys: |
-            ${{ runner.os }}-milkv-duos-
+            ${{ runner.os }}-os-image-builder-
 
-      - name: Install Dependencies
-        run: |
-          sudo bash ./install_dependencies.sh
+      - name: Install dependencies
+        run: sudo bash ./install_dependencies.sh
 
-      - name: Clean apt cache after dependencies
+      - name: Clean apt cache
         run: |
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/* || true
           df -h
 
-      - name: Configure Environment
-        # clones SDK, patches configs, downloads ubuntu base
-        run: |
-          bash ./configure.sh
+      - name: Configure environment
+        run: bash ./configure.sh
 
       - name: Cleanup after configure
         run: |
-          # Remove ubuntu base tarball (saves a few hundred MB)
           sudo rm -f ubuntu_base/ubuntu-base-*.tar.gz || true
-          
-          # Remove SDK git history to save space (if not needed for later steps)
-          if [ -d "duo-buildroot-sdk/.git" ]; then
-            sudo rm -rf duo-buildroot-sdk/.git || true
-            echo "Removed SDK .git directory to save space"
+          if [ -d "duo-buildroot-sdk-v2/.git" ]; then
+            sudo rm -rf duo-buildroot-sdk-v2/.git || true
+            echo "Removed SDK .git to save space"
           fi
-          
-          # Clean up any temporary files
-          sudo find . -type f -name "*.tmp" -delete || true
-          sudo find . -type f -name "*.log" -delete || true
-          
+          sudo find . -type f \( -name "*.tmp" -o -name "*.log" \) -delete 2>/dev/null || true
           df -h
 
-      # --------------------
-      # SDK build
-      # --------------------
+      # --- SDK build ---
       - name: Build SDK
         if: inputs.build_type == 'sdk_only' || inputs.build_type == 'full'
-        run: |
-          # your build_sdk.sh runs the SDK build wrapper
-          bash ./build_sdk.sh
+        run: bash ./build_sdk.sh
 
-      - name: Clean buildroot intermediates (saves lots of space)
+      - name: Clean SDK intermediates
         if: (inputs.build_type == 'sdk_only' || inputs.build_type == 'full') && inputs.cleanup_level != 'none'
         run: |
-          echo "=== Cleanup level: ${{ inputs.cleanup_level }} ==="
+          echo "=== Cleanup: ${{ inputs.cleanup_level }} ==="
           df -h
-
           if [ "${{ inputs.cleanup_level }}" = "intermediate" ] || [ "${{ inputs.cleanup_level }}" = "aggressive" ]; then
-            # keep output/host toolchain + output/images, remove heavy intermediates
-            sudo rm -rf duo-buildroot-sdk/buildroot-2021.05/dl || true
-            sudo rm -rf duo-buildroot-sdk/buildroot-2021.05/output/build || true
-            
-            # Remove build logs and temporary files
-            sudo find duo-buildroot-sdk -type f -name "*.log" -delete || true
-            sudo find duo-buildroot-sdk -type f -name "*.tmp" -delete || true
-            sudo find duo-buildroot-sdk -type d -name ".git" -exec rm -rf {} + || true
+            sudo rm -rf duo-buildroot-sdk-v2/buildroot-*/dl 2>/dev/null || true
+            sudo rm -rf duo-buildroot-sdk-v2/buildroot-*/output/build 2>/dev/null || true
+            sudo rm -rf duo-buildroot-sdk-v2/build/output 2>/dev/null || true
+            sudo find duo-buildroot-sdk-v2 -type f \( -name "*.log" -o -name "*.tmp" \) -delete 2>/dev/null || true
           fi
-
           if [ "${{ inputs.cleanup_level }}" = "aggressive" ]; then
-            # WARNING: only do this if later steps do NOT need these trees.
-            # systemd/image steps mainly need: duo-buildroot-sdk/out + duo-buildroot-sdk/install
-            sudo rm -rf duo-buildroot-sdk/buildroot-2021.05 || true
-            sudo rm -rf duo-buildroot-sdk/linux_5.10 || true
-            sudo rm -rf duo-buildroot-sdk/u-boot-2021.10 || true
-            sudo rm -rf duo-buildroot-sdk/opensbi || true
-            sudo rm -rf duo-buildroot-sdk/freertos || true
-            sudo rm -rf duo-buildroot-sdk/fsbl || true
-
+            sudo rm -rf duo-buildroot-sdk-v2/buildroot-* duo-buildroot-sdk-v2/linux_5.10 duo-buildroot-sdk-v2/u-boot-* 2>/dev/null || true
+            sudo rm -rf duo-buildroot-sdk-v2/opensbi duo-buildroot-sdk-v2/freertos duo-buildroot-sdk-v2/fsbl 2>/dev/null || true
             sudo apt-get clean
             sudo apt-get autoremove -y
-            sudo rm -rf /tmp/* /var/tmp/* || true
-            sudo rm -rf /var/cache/apt/archives/* || true
+            sudo rm -rf /tmp/* /var/tmp/* /var/cache/apt/archives/* 2>/dev/null || true
           fi
-
           df -h
 
-      # --------------------
-      # systemd rootfs prep
-      # --------------------
-      - name: Install Systemd into ubuntu_base (QEMU chroot)
+      # --- RootFS (systemd + users) ---
+      - name: Install systemd into ubuntu_base
         if: inputs.build_type == 'systemd_only' || inputs.build_type == 'full'
-        run: |
-          sudo bash ./install_systemd.sh
+        run: sudo bash ./install_systemd.sh
 
-      - name: Cleanup after systemd installation
+      - name: Cleanup after systemd
         if: inputs.build_type == 'systemd_only' || inputs.build_type == 'full'
         run: |
-          # Clean apt cache inside ubuntu_base
-          sudo chroot ubuntu_base apt-get clean || true
-          sudo rm -rf ubuntu_base/var/lib/apt/lists/* || true
-          sudo rm -rf ubuntu_base/var/cache/apt/archives/* || true
-          
-          # Remove documentation and man pages to save space (optional but saves ~100MB+)
-          sudo find ubuntu_base/usr/share/doc -type f ! -name "copyright" -delete || true
-          sudo find ubuntu_base/usr/share/man -type f -delete || true
-          sudo find ubuntu_base/usr/share/info -type f -delete || true
-          
-          # Remove locale files except en_US (saves ~50MB+)
-          sudo find ubuntu_base/usr/share/locale -mindepth 1 -maxdepth 1 ! -name "en_US*" -exec rm -rf {} + || true
-          
-          # Clean temporary files
-          sudo rm -rf ubuntu_base/tmp/* || true
-          sudo rm -rf ubuntu_base/var/tmp/* || true
-          
+          sudo chroot ubuntu_base apt-get clean 2>/dev/null || true
+          sudo rm -rf ubuntu_base/var/lib/apt/lists/* ubuntu_base/var/cache/apt/archives/* 2>/dev/null || true
+          sudo find ubuntu_base/usr/share/doc -type f ! -name "copyright" -delete 2>/dev/null || true
+          sudo find ubuntu_base/usr/share/man ubuntu_base/usr/share/info -type f -delete 2>/dev/null || true
+          sudo find ubuntu_base/usr/share/locale -mindepth 1 -maxdepth 1 ! -name "en_US*" -exec rm -rf {} + 2>/dev/null || true
+          sudo rm -rf ubuntu_base/tmp/* ubuntu_base/var/tmp/* 2>/dev/null || true
           df -h
 
-      - name: Setup Users
+      - name: Setup users
         if: inputs.build_type == 'systemd_only' || inputs.build_type == 'full'
-        run: |
-          sudo bash ./setup_users.sh
+        run: sudo bash ./setup_users.sh
 
-      - name: Cleanup after user setup
+      - name: Cleanup after users
         if: inputs.build_type == 'systemd_only' || inputs.build_type == 'full'
         run: |
-          # Clean any remaining temporary files
-          sudo rm -rf ubuntu_base/tmp/* || true
-          sudo rm -rf ubuntu_base/var/tmp/* || true
-          sudo find ubuntu_base -type f -name "*.log" -delete || true
+          sudo rm -rf ubuntu_base/tmp/* ubuntu_base/var/tmp/* 2>/dev/null || true
+          sudo find ubuntu_base -type f -name "*.log" -delete 2>/dev/null || true
           df -h
 
-      # --------------------
-      # image build
-      # --------------------
-      - name: Build Final Image
+      # --- Image pack ---
+      - name: Build final image
+        if: inputs.build_type == 'image_only' || inputs.build_type == 'full'
+        run: sudo -E bash ./build_image.sh
+
+      - name: Cleanup after image
         if: inputs.build_type == 'image_only' || inputs.build_type == 'full'
         run: |
-          # build_image.sh uses loop devices/mounts; keep env if you add any later
-          sudo -E bash ./build_image.sh
-
-      - name: Cleanup after image build
-        if: inputs.build_type == 'image_only' || inputs.build_type == 'full'
-        run: |
-          # Clean up any loop devices that might still be attached
           sudo losetup -D || true
-          sudo umount /mnt/sdcard_rootfs 2>/dev/null || true
-          sudo umount /mnt/sdcard_boot 2>/dev/null || true
-          
-          # Remove intermediate image files (keep only final -ubuntu.img)
-          sudo find duo-buildroot-sdk/out -name "*.img" ! -name "*-ubuntu.img" -delete || true
-          sudo find duo-buildroot-sdk/out -name "*.img.backup" -delete || true
-          
-          # Clean up any build artifacts
-          sudo rm -rf /tmp/* /var/tmp/* || true
+          sudo umount /mnt/sdcard_rootfs /mnt/sdcard_boot 2>/dev/null || true
+          sudo find duo-buildroot-sdk-v2/out -name "*.img" ! -name "*-ubuntu.img" -delete 2>/dev/null || true
+          sudo find duo-buildroot-sdk-v2/out -name "*.img.backup" -delete 2>/dev/null || true
+          sudo rm -rf /tmp/* /var/tmp/* 2>/dev/null || true
           df -h
+
+      - name: Verify image artifact
+        if: inputs.build_type == 'image_only' || inputs.build_type == 'full'
+        run: |
+          set -e
+          IMG=$(find duo-buildroot-sdk-v2/out -maxdepth 1 -name "*-ubuntu.img" -type f | head -1)
+          if [ -z "$IMG" ]; then
+            echo "::error::No *-ubuntu.img found in duo-buildroot-sdk-v2/out/"
+            exit 1
+          fi
+          SIZE=$(stat -c%s "$IMG" 2>/dev/null || stat -f%z "$IMG" 2>/dev/null)
+          SIZE_MB=$((SIZE / 1024 / 1024))
+          if [ "$SIZE_MB" -lt 100 ]; then
+            echo "::warning::Image size ${SIZE_MB}MB seems too small (expected >100MB)"
+          fi
+          echo "IMAGE_PATH=$IMG" >> $GITHUB_ENV
+          echo "IMAGE_SIZE_MB=$SIZE_MB" >> $GITHUB_ENV
+          echo "Image: $IMG (${SIZE_MB}MB)"
+          ls -la "$IMG"
+          sha256sum "$IMG" || shasum -a 256 "$IMG"
 
       - name: Final disk space
         run: |
           sync
           sleep 2
           df -h || true
-          du -sh duo-buildroot-sdk/out/*.img 2>/dev/null || true
+          du -sh duo-buildroot-sdk-v2/out/*.img 2>/dev/null || true
 
-      - name: Upload Image Artifact
+      - name: Upload image artifact
         if: inputs.build_type == 'image_only' || inputs.build_type == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: milkv-duos-ubuntu-image
-          path: |
-            duo-buildroot-sdk/out/*-ubuntu.img
+          path: duo-buildroot-sdk-v2/out/*-ubuntu.img
           if-no-files-found: error
-          retention-days: 7
+          retention-days: ${{ inputs.artifact_retention_days }}
+
+      - name: Build summary
+        if: always()
+        run: |
+          echo "## Build summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Input | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Build type | \`${{ inputs.build_type }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Cleanup level | \`${{ inputs.cleanup_level }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Artifact retention | ${{ inputs.artifact_retention_days }} days |" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.build_type }}" = "image_only" ] || [ "${{ inputs.build_type }}" = "full" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Download the **milkv-duos-ubuntu-image** artifact above. Flash with BalenaEtcher (Windows) or \`dd if=<image> of=/dev/sdX bs=4M status=progress\` (Linux)." >> $GITHUB_STEP_SUMMARY
+          fi

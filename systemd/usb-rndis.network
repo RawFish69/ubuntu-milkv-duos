@@ -3,5 +3,6 @@ Name=usb1
 
 [Network]
 Address=192.168.42.1/24
+ConfigureWithoutCarrier=yes
 LinkLocalAddressing=no
 IPv6AcceptRA=no

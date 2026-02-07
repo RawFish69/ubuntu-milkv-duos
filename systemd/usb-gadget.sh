@@ -16,6 +16,8 @@ get_serial() {
 }
 
 load_modules() {
+    # Unload legacy g_ether if present; it can own the UDC and block configfs
+    modprobe -r g_ether 2>/dev/null || true
     for mod in "${VMLINUX_MODULES[@]}"; do
         modprobe "$mod" 2>/dev/null || true
     done
@@ -31,6 +33,8 @@ mount_configfs() {
 setup_gadget() {
     mount_configfs
     load_modules
+    # Ensure stale gadget state doesn't block reconfiguration
+    teardown_gadget
 
     mkdir -p "$GADGET_DIR"
     echo 0x1d6b > "${GADGET_DIR}/idVendor"
@@ -77,7 +81,18 @@ setup_gadget() {
         echo "No UDC found; gadget not bound." >&2
         return 1
     fi
-    echo "$UDC" > "${GADGET_DIR}/UDC"
+    # Unbind any other gadgets that may already own the UDC
+    for g in /sys/kernel/config/usb_gadget/*; do
+        if [ -e "$g/UDC" ]; then
+            echo "" > "$g/UDC" 2>/dev/null || true
+        fi
+    done
+    # Bind this gadget to the UDC (retry once if busy)
+    if ! echo "$UDC" > "${GADGET_DIR}/UDC" 2>/dev/null; then
+        sleep 1
+        echo "" > "${GADGET_DIR}/UDC" 2>/dev/null || true
+        echo "$UDC" > "${GADGET_DIR}/UDC"
+    fi
 
     # Configure interfaces (systemd-networkd can also do this)
     # Note: systemd-networkd will handle IP assignment via .network files
@@ -89,13 +104,25 @@ teardown_gadget() {
     if [ ! -d "$GADGET_DIR" ]; then
         return 0
     fi
-    echo "" > "${GADGET_DIR}/UDC" 2>/dev/null || true
+    # Unbind if currently bound
+    if [ -e "${GADGET_DIR}/UDC" ]; then
+        echo "" > "${GADGET_DIR}/UDC" 2>/dev/null || true
+    fi
+    # Remove config links and os_desc link
     rm -f "${CONFIG_DIR}/ecm.usb0" "${CONFIG_DIR}/rndis.usb1" 2>/dev/null || true
+    rm -f "${GADGET_DIR}/os_desc/c.1" 2>/dev/null || true
+    # Remove function-specific os_desc before removing functions
+    rmdir "${GADGET_DIR}/functions/rndis.usb1/os_desc/interface.rndis" 2>/dev/null || true
+    rmdir "${GADGET_DIR}/functions/rndis.usb1/os_desc" 2>/dev/null || true
     rmdir "${GADGET_DIR}/functions/ecm.usb0" 2>/dev/null || true
     rmdir "${GADGET_DIR}/functions/rndis.usb1" 2>/dev/null || true
+    # Remove config and strings
     rmdir "${CONFIG_DIR}/strings/0x409" 2>/dev/null || true
+    rmdir "${CONFIG_DIR}/strings" 2>/dev/null || true
     rmdir "${CONFIG_DIR}" 2>/dev/null || true
     rmdir "${STRINGS_DIR}" 2>/dev/null || true
+    rmdir "${GADGET_DIR}/strings" 2>/dev/null || true
+    rmdir "${GADGET_DIR}/os_desc" 2>/dev/null || true
     rmdir "${GADGET_DIR}" 2>/dev/null || true
 }
 

@@ -1,36 +1,50 @@
 # Ubuntu Base Port for Milk-V Duo S
 
-Port Ubuntu Base 22.04 to Milk-V Duo S (SG2000/CV1813H) by replacing Buildroot rootfs while keeping official kernel and bootloader. 
-> This was made for a robotics research project on my other github account but that repo is closed source atm. Also, use this repo at your own risk.
+Port Ubuntu Base 22.04 to Milk-V Duo S (SG2000/CV1813H) by replacing Buildroot rootfs while keeping the official kernel and bootloader.
 
-## Automated Build
+> This was made for a robotics research project on my other GitHub account but that repo is closed source at the moment. **Use this repo at your own risk.**
 
-**GitHub Actions** CI checks the setup on every push. 
+This repository builds a custom Ubuntu 22.04 (ARM64) image for the Milk-V Duo S using the **duo-buildroot-sdk-v2** SDK. Set the board hardware switch to ARM and use the ARM-compatible SDK v2 target; chroot operations use `qemu-aarch64-static`.
 
-To build the full image:
-1. Go to **Actions** tab.
-2. Select **Manual Full Build**.
-3. Click **Run workflow**.
-4. Download artifact when done.
+## Features
+
+- **Users** (created automatically during build):
+  - `root` (password: `milkv`)
+  - `admin` (password: `69420`, sudo enabled)
+  - `ubuntu` (password: `milkv`, sudo enabled)
+- **Networking**:
+  - **USB-C**: RNDIS/ECM gadget. Connect to PC and SSH to `192.168.42.1`.
+  - **Ethernet**: DHCP via `systemd-networkd`.
+- **Tools**: `ssh`, `gcc`, `make`, `git`, `nano`, `htop`, `fdisk`, `lsusb` included.
+- **Ready LED**: Blue LED blinks when USB gadget has an address (configurable via `/etc/default/led-ready`).
+
+## Automated Build (GitHub Actions)
+
+**GitHub Actions** in this repo can run the full pipeline or individual stages.
+
+1. Open the **Actions** tab in this repository.
+2. Select **Build Milk-V Duo S Ubuntu Image** (or **Manual Full Build**).
+3. Click **Run workflow**, choose build type (e.g. `full` for complete build) and cleanup level.
+4. When the run finishes, download the artifact from the workflow summary.
 
 ## Local Build
 
-If you need to build locally, we provide a `configure.sh` script to automate setup.
-
 **Prerequisites:** Ubuntu 20.04/22.04 or WSL2.
 
-### 1. Setup Environment
+### 1. Setup environment
+
 ```bash
 # Install dependencies
 bash install_dependencies.sh
 
-# Clone SDK, patch config, and download Ubuntu Base
+# Clone SDK v2, patch config, and download Ubuntu Base
 bash configure.sh
 ```
 
 ### 2. Build
+
 ```bash
-# Build the SDK (Compiles kernel/uboot - takes time)
+# Build the SDK (compiles kernel/uboot — takes time)
 sudo bash build_sdk.sh
 
 # Prepare Ubuntu rootfs
@@ -42,147 +56,185 @@ sudo bash build_image.sh
 ```
 
 **Custom image size:**
+
 ```bash
-IMAGE_SIZE_MB=4096 sudo bash build_image.sh
+TARGET_SIZE_MB=4096 sudo bash build_image.sh
 ```
+
+**Notes:**
+
+- You do **not** need to run `patch_sdk.sh` manually; `configure.sh` and `build_sdk.sh` run it automatically.
+- If your system has only `python3`, the repo provides `tools/python` and `build_sdk.sh` adds it to PATH.
+- On ARM64, PQTool is skipped by default. To enable: `export BUILD_PQTOOL=1` before `build_sdk.sh`.
+- **Wi-Fi DTS patch:** To disable: `export ENABLE_WIFI_PATCH=0`. To add extra properties:  
+  `export WIFI_DTS_PROPS='reset-gpios = <&gpio 3 2 GPIO_ACTIVE_LOW>;'`
+
+The final image is written under `duo-buildroot-sdk-v2/out/` (e.g. `*-ubuntu.img`).
 
 ## Connecting to the Board
 
-### Serial Console (UART0)
+### Serial console (UART0)
 
-Use a USB-to-TTL adapter (3.3V logic).
+Use a USB-to-TTL adapter (3.3 V logic).
 
-- **TX** to Pin 10 (Rx)
-- **RX** to Pin 8 (Tx)
-- **GND** to Pin 9
-- **Baud**: 115200
+- **TX** → Pin 10 (Rx)
+- **RX** → Pin 8 (Tx)
+- **GND** → Pin 9
+- **Baud:** 115200
 
 ### SSH (USB RNDIS)
 
 Connect via USB-C. Board IP is `192.168.42.1`.
 
 **Users:**
-- `root` (password: `milkv`)
-- `admin` (password: `69420`, sudo enabled) - Created automatically during build
-- `ubuntu` (password: `milkv`, sudo enabled) - Default Ubuntu user
 
-**Windows**: RNDIS driver should auto-install. SSH to `root@192.168.42.1` or `admin@192.168.42.1`.
-**Linux/WSL**:
+- `root` (password: `milkv`)
+- `admin` (password: `69420`, sudo enabled)
+- `ubuntu` (password: `milkv`, sudo enabled)
+
+**Windows:** RNDIS driver should auto-install. SSH to `root@192.168.42.1` or `admin@192.168.42.1`.
+
+**Linux/WSL:**
+
 ```bash
-sudo ip addr add 192.168.42.2/24 dev usb0  # Set host IP if needed
+sudo ip addr add 192.168.42.2/24 dev usb0   # Set host IP if needed
 ssh root@192.168.42.1
 # or
 ssh admin@192.168.42.1
 ```
 
-**WSL2 Note:** USB passthrough to WSL2 requires [usbipd-win](https://github.com/dorssel/usbipd-win). Alternatively, SSH from Windows PowerShell instead.
+**WSL2:** USB passthrough to WSL2 needs [usbipd-win](https://github.com/dorssel/usbipd-win). Alternatively, use SSH from Windows PowerShell.
 
-### Internet Access for the Board
+If the board shows `NO-CARRIER`, the host has not enumerated the USB gadget yet — use a data-capable USB-C cable and the OTG port (avoid hubs).
 
-The board can access the internet through your host PC:
+### Internet access for the board
 
-**On Linux Host:**
+The board can use the host’s internet:
+
+**On Linux host:**
+
 ```bash
-# Enable IP forwarding
 sudo sysctl -w net.ipv4.ip_forward=1
-
-# NAT the board's traffic (replace eth0 with your internet interface)
 sudo iptables -t nat -A POSTROUTING -s 192.168.42.0/24 -o eth0 -j MASQUERADE
 ```
 
-**On the Board:**
+**On the board:**
+
 ```bash
-# Add default route through host
 ip route add default via 192.168.42.2
 ```
 
 ## Troubleshooting
 
 **Board not booting:**
-- Connect serial console to see boot messages
-- Verify boot files: `fip.bin` and `boot.sd` must both be in partition 1
-- Try flashing stock SDK image first to verify hardware works
 
-**No output on serial console:**
-- Check TX/RX aren't swapped
-- Verify baud rate is 115200
-- Ensure ground is connected
+- Use serial console to see boot messages.
+- Ensure boot files `fip.bin` and `boot.sd` are in partition 1.
+- Try flashing the stock SDK image first to confirm hardware.
+
+**No serial output:**
+
+- Check TX/RX are not swapped, baud is 115200, and GND is connected.
 
 **USB RNDIS not working:**
-- Check USB cable supports data (not charge-only)
-- On Windows: Check Device Manager for RNDIS adapter
-- Kernel modules must be present in `/lib/modules`
+
+- Use a data-capable cable; on Windows check Device Manager for the RNDIS adapter.
+- Ensure kernel modules are present in `/lib/modules`.
 
 **SSH not working:**
-- Verify SSH service is running: `systemctl status ssh`
-- Check if users exist: `id admin` or `id ubuntu`
-- Ensure USB gadget is active: `ip addr show usb0`
-- Try manual USB gadget fix: `sudo /usr/local/bin/fix-usb-gadget.sh`
+
+- Check: `systemctl status ssh`, `id admin` / `id ubuntu`, `ip addr show usb0`.
+- Try: `sudo /usr/local/bin/fix-usb-gadget.sh`
 
 **Script errors:**
-- Ensure `qemu-user-static` installed
-- Check disk space
-- Verify Ubuntu Base extracted correctly
 
-**Loop device busy error:**
-```
+- Install `qemu-user-static`, check disk space, and that Ubuntu Base was extracted correctly.
+
+**Loop device busy:**
+
+```text
 losetup: failed to set up loop device: Device or resource busy
 ```
-Fix by detaching loop devices:
+
+Detach and retry:
+
 ```bash
 sudo umount /mnt/sdcard_rootfs 2>/dev/null
 sudo umount /mnt/sdcard_boot 2>/dev/null
-sudo losetup -D  # Detach all loop devices
+sudo losetup -D
 ```
+
 Then run `build_image.sh` again.
 
-**Rootfs partition too small (manual resize after flash):**
-If you've already flashed and booted, resize on the device:
-```bash
-# 1. Resize partition (replace p3/p4 with your rootfs partition)
-fdisk /dev/mmcblk0
-# Type: d, 3 (delete partition 3)
-# Type: n, 3 (create new partition, same start sector, use all space)
-# Type: w (write)
+**Rootfs partition too small (resize after flash):**
 
-# 2. Reboot, then resize filesystem
+If the board has already booted from the flashed image:
+
+```bash
+fdisk /dev/mmcblk0
+# d, 3 — delete partition 3
+# n, 3 — new partition 3, same start sector, use rest of disk
+# w — write
 reboot
 resize2fs /dev/mmcblk0p3
 ```
 
-## Testing Stock Image (Debug Boot Issues)
+## Testing stock image (debug boot)
 
-If the board won't boot, first test with stock Buildroot:
+If the board does not boot, test with stock Buildroot first:
 
 ```bash
-# Rebuild SDK (creates fresh stock image)
-cd duo-buildroot-sdk
-./build.sh milkv-duos-sd
-
-# Flash the NEW image from out/ WITHOUT running build_image.sh
-# The stock image should be ~150-200MB
+cd duo-buildroot-sdk-v2
+./build.sh milkv-duos-glibc-arm64-sd
+# Flash the new image from out/ without running build_image.sh
 ```
 
-If stock boots: proceed with Ubuntu steps.  
-If stock doesn't boot: check SD card, serial console, or try different USB cable.
+If stock boots, continue with the Ubuntu steps. If not, check SD card, serial connection, and USB cable.
 
-## Future Work
+## Testing and setup commands (on the board)
 
-I am working on additional features in the other repository - I plan to sync the following features here when possible, such as:
-*   **WiringX**: GPIO library support.
-*   **ROS2**: Robot Operating System 2 integration.
-*   And more...
+**USB gadget:**
 
-## Quick Reference
+```bash
+systemctl status usb-gadget --no-pager
+ip addr show usb0
+networkctl status usb0
+```
 
-| Item | Value |
-|------|-------|
-| Board IP (USB) | `192.168.42.1` |
-| SSH Login (root) | `root` / `milkv` |
-| SSH Login (admin) | `admin` / `69420` |
-| SSH Login (ubuntu) | `ubuntu` / `milkv` |
-| Serial Baud | `115200` |
-| Serial Device | `ttyS0` |
-| UART0 TX | Pin 8 (A16) → Adapter RX |
-| UART0 RX | Pin 10 (A17) ← Adapter TX |
-| GND | Pin 9 |
+**LED ready service:**
+
+```bash
+systemctl status led-ready --no-pager
+```
+
+**Serial console (on host):**
+
+```bash
+screen /dev/ttyUSB0 115200
+```
+
+## Quick reference
+
+| Item            | Value              |
+|----------------|--------------------|
+| Board IP (USB) | `192.168.42.1`     |
+| SSH (root)     | `root` / `milkv`   |
+| SSH (admin)    | `admin` / `69420`  |
+| SSH (ubuntu)   | `ubuntu` / `milkv` |
+| Serial baud    | `115200`           |
+| Serial device  | `ttyS0`            |
+| UART0 TX       | Pin 8 (A16) → adapter RX |
+| UART0 RX       | Pin 10 (A17) ← adapter TX |
+| GND            | Pin 9              |
+
+## Future work
+
+I may sync more features from the other repository when possible, for example:
+
+- **WiringX** — GPIO library support.
+- **ROS2** — Robot Operating System 2 integration.
+- Other improvements as they mature.
+
+## License and disclaimer
+
+Use this repository and the generated images at your own risk. See the project’s license terms for details.

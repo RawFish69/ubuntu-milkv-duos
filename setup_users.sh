@@ -60,32 +60,31 @@ EOF"
 fi
 
 # Set root password
-    sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "echo 'root:milkv' | chpasswd"
-# Removed incorrect fi
+sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-aarch64-static /bin/sh -c "echo 'root:milkv' | chpasswd"
 
 # Create 'admin' user
 echo "Creating user 'admin'..."
 # Check if user exists (POSIX compliant redirection)
-if ! sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "id -u admin >/dev/null 2>&1"; then
-    sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "useradd -m -s /bin/bash admin"
+if ! sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-aarch64-static /bin/sh -c "id -u admin >/dev/null 2>&1"; then
+    sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-aarch64-static /bin/sh -c "useradd -m -s /bin/bash admin"
 fi
 
 # Set password using usermod -p with hash to avoid CHPASSWD/PAM issues in chroot
 # Hash for '69420': $6$D1mL14pctsEZqZwr$apG.RoLxZdHtMK7reySwMpnVPU2u6eWQDaPjlziLePnvkSD6c/ALj32jekRMJg5llRz1odkA5PrRAbCuPr1rr1
 ADMIN_HASH='\$6\$D1mL14pctsEZqZwr\$apG.RoLxZdHtMK7reySwMpnVPU2u6eWQDaPjlziLePnvkSD6c/ALj32jekRMJg5llRz1odkA5PrRAbCuPr1rr1'
-sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "usermod -p '$ADMIN_HASH' admin"
-sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "usermod -aG sudo admin"
+sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-aarch64-static /bin/sh -c "usermod -p '$ADMIN_HASH' admin"
+sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-aarch64-static /bin/sh -c "usermod -aG sudo admin"
 
 # Create 'ubuntu' user (default Ubuntu user)
 echo "Creating user 'ubuntu'..."
-if ! sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "id -u ubuntu >/dev/null 2>&1"; then
-    sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "useradd -m -s /bin/bash ubuntu"
+if ! sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-aarch64-static /bin/sh -c "id -u ubuntu >/dev/null 2>&1"; then
+    sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-aarch64-static /bin/sh -c "useradd -m -s /bin/bash ubuntu"
 fi
 
 # Set ubuntu password to 'milkv'
 echo "Setting ubuntu user password to 'milkv'..."
-sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "echo 'ubuntu:milkv' | chpasswd"
-sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "usermod -aG sudo ubuntu"
+sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-aarch64-static /bin/sh -c "echo 'ubuntu:milkv' | chpasswd"
+sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-aarch64-static /bin/sh -c "usermod -aG sudo ubuntu"
 
 # Enable SSH service
 echo "Enabling SSH service..."
@@ -109,7 +108,7 @@ sudo bash -c "cat > $UBUNTU_BASE/etc/motd << 'EOF'
 ╚════════════════════════════════════════════════════════╝
 
 System Information:
-  - Ubuntu 22.04 LTS (Jammy Jellyfish) for RISC-V
+  - Ubuntu 22.04 LTS (Jammy Jellyfish) for ARM64
   - Kernel: Linux 5.10 (custom build)
   - USB-C Networking: Enabled via USB Gadget
 
@@ -144,8 +143,9 @@ fi
 echo ""
 echo "✓ User and SSH configuration complete!"
 echo "  Root password: milkv"
+echo "  Admin user: admin (password: 69420)"
 echo "  Ubuntu user: ubuntu (password: milkv)"
 echo "  SSH: Enabled on boot"
 echo "  USB Gadget IP: 192.168.42.1"
-echo "  Connect via: ssh ubuntu@192.168.42.1"
+echo "  Connect via: ssh admin@192.168.42.1"
 echo ""

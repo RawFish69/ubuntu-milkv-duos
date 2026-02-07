@@ -8,8 +8,12 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SDK_DIR="$SCRIPT_DIR/duo-buildroot-sdk"
+SDK_DIR="$SCRIPT_DIR/duo-buildroot-sdk-v2"
 UBUNTU_DIR="$SCRIPT_DIR/ubuntu_base"
+MILKV_ARCH="${MILKV_ARCH:-arm64}"
+UBUNTU_BASE_ARCH="${UBUNTU_BASE_ARCH:-$MILKV_ARCH}"
+UBUNTU_BASE_TARBALL="ubuntu-base-22.04-base-${UBUNTU_BASE_ARCH}.tar.gz"
+UBUNTU_BASE_URL="http://cdimage.ubuntu.com/ubuntu-base/releases/22.04/release/${UBUNTU_BASE_TARBALL}"
 
 echo "=========================================="
 echo "Configuring Build Environment"
@@ -17,14 +21,53 @@ echo "=========================================="
 
 # 1. Clone SDK
 if [ ! -d "$SDK_DIR" ]; then
-    echo "Cloning duo-buildroot-sdk..."
-    git clone https://github.com/milkv-duo/duo-buildroot-sdk.git "$SDK_DIR"
+    echo "Cloning duo-buildroot-sdk-v2..."
+    git clone https://github.com/milkv-duo/duo-buildroot-sdk-v2.git "$SDK_DIR"
 else
     echo "Filesystem check: SDK directory exists."
 fi
 
+# 1.5 Patch SDK for tinyalsa link dependency (pcm_* undefined references)
+bash "$SCRIPT_DIR/patch_sdk.sh" "$SDK_DIR"
+
 # 2. Patch Kernel Config
-CONFIG_FILE="$SDK_DIR/build/boards/cv181x/cv1813h_milkv_duos_sd/linux/cvitek_cv1813h_milkv_duos_sd_defconfig"
+DEFAULT_DEFCONFIG="$SDK_DIR/build/boards/cv181x/sg2000_milkv_duos_glibc_arm64_sd/linux/cvitek_sg2000_milkv_duos_glibc_arm64_sd_defconfig"
+CONFIG_FILE="${MILKV_SDK_DEFCONFIG:-$DEFAULT_DEFCONFIG}"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "Default defconfig not found: $CONFIG_FILE"
+    echo "Searching for Duo S defconfigs in SDK..."
+    mapfile -t DUOS_DEFCONFIGS < <(find "$SDK_DIR/build/boards" -type f -name "*duos*defconfig*" 2>/dev/null)
+
+    if [ "${#DUOS_DEFCONFIGS[@]}" -eq 0 ]; then
+        echo "No Duo S defconfigs found in SDK."
+        echo "Set MILKV_SDK_DEFCONFIG to the correct defconfig path."
+        exit 1
+    fi
+
+    if [[ "$MILKV_ARCH" == "arm64" ]]; then
+        mapfile -t ARM_DEFCONFIGS < <(printf '%s\n' "${DUOS_DEFCONFIGS[@]}" | grep -iE "arm|aarch64" || true)
+        if [ "${#ARM_DEFCONFIGS[@]}" -eq 1 ]; then
+            CONFIG_FILE="${ARM_DEFCONFIGS[0]}"
+            echo "Using detected ARM defconfig: $CONFIG_FILE"
+        else
+            echo "Found multiple or no ARM defconfig candidates:"
+            printf '  %s\n' "${DUOS_DEFCONFIGS[@]}"
+            echo "Set MILKV_SDK_DEFCONFIG to the correct defconfig path."
+            exit 1
+        fi
+    else
+        if [ "${#DUOS_DEFCONFIGS[@]}" -eq 1 ]; then
+            CONFIG_FILE="${DUOS_DEFCONFIGS[0]}"
+            echo "Using detected defconfig: $CONFIG_FILE"
+        else
+            echo "Found multiple defconfig candidates:"
+            printf '  %s\n' "${DUOS_DEFCONFIGS[@]}"
+            echo "Set MILKV_SDK_DEFCONFIG to the correct defconfig path."
+            exit 1
+        fi
+    fi
+fi
 
 if [ -f "$CONFIG_FILE" ]; then
     echo "Patching kernel configuration..."
@@ -165,8 +208,14 @@ if [ -f "$CONFIG_FILE" ]; then
     ensure_config "CONFIG_USB_ETH_EEM"
     
     # Localversion: keep kernelrelease + module vermagic aligned
-    # Match the Milk-V DuoS release suffix: "5.10.4-tag-"
-    ensure_config_value "CONFIG_LOCALVERSION" "\"-tag-\""
+    # Avoid double-suffix like "5.10.4-tag--tag-".
+    # If the SDK already provides a localversion suffix, do not append another.
+    if grep -q "^CONFIG_LOCALVERSION=\".*-tag-.*\"" "$CONFIG_FILE"; then
+        echo "  CONFIG_LOCALVERSION already contains -tag-; leaving as-is."
+    else
+        echo "  Setting CONFIG_LOCALVERSION to empty to avoid double suffix."
+        ensure_config_value "CONFIG_LOCALVERSION" "\"\""
+    fi
     if grep -q "^CONFIG_LOCALVERSION_AUTO=y" "$CONFIG_FILE"; then
         echo "  Disabling CONFIG_LOCALVERSION_AUTO"
         sed -i "s/^CONFIG_LOCALVERSION_AUTO=y/# CONFIG_LOCALVERSION_AUTO is not set/" "$CONFIG_FILE"
@@ -174,10 +223,40 @@ if [ -f "$CONFIG_FILE" ]; then
     
     echo "USB Gadget configuration complete."
     echo "Kernel config patched."
+
+    # Wi-Fi stack + SDIO essentials (for onboard Wi-Fi modules)
+    echo "Configuring Wi-Fi/SDIO kernel options..."
+    ensure_config "CONFIG_WLAN"
+    ensure_config "CONFIG_WIRELESS"
+    ensure_config "CONFIG_CFG80211"
+    ensure_config_module "CONFIG_MAC80211"
+    ensure_config "CONFIG_RFKILL"
+    ensure_config "CONFIG_MMC"
+    ensure_config "CONFIG_MMC_BLOCK"
+    ensure_config "CONFIG_MMC_SDHCI"
+    ensure_config "CONFIG_MMC_SDHCI_PLTFM"
+    ensure_config "CONFIG_MMC_SDHCI_OF_ARASAN"
+    ensure_config "CONFIG_MMC_SDIO"
+    # Common SDIO Wi-Fi drivers (modules if available in this kernel)
+    ensure_config_module "CONFIG_BRCMFMAC"
+    ensure_config_module "CONFIG_BRCMFMAC_SDIO"
+    ensure_config_module "CONFIG_RTL8723BS"
+    ensure_config_module "CONFIG_RTL8723DS"
+    ensure_config_module "CONFIG_RTL8189ES"
+    echo "Wi-Fi/SDIO configuration complete."
 else
     echo "Error: Config file not found at $CONFIG_FILE"
     echo "Has the SDK structure changed?"
     exit 1
+fi
+
+# 2.5 Patch device tree to enable Wi-Fi SDIO (if present)
+ENABLE_WIFI_PATCH="${ENABLE_WIFI_PATCH:-1}"
+if [ "$ENABLE_WIFI_PATCH" = "1" ]; then
+    echo "Patching device tree for Wi-Fi SDIO (4320000) if needed..."
+    bash "$SCRIPT_DIR/patch_wifi_dts.sh" "$SDK_DIR" || true
+else
+    echo "Wi-Fi DTS patch disabled (ENABLE_WIFI_PATCH=$ENABLE_WIFI_PATCH)."
 fi
 
 # 3. Download Ubuntu Base
@@ -189,12 +268,12 @@ fi
 if [ ! -d "$UBUNTU_DIR/bin" ]; then
     echo "Downloading Ubuntu Base 22.04..."
     cd "$UBUNTU_DIR"
-    wget -N http://cdimage.ubuntu.com/ubuntu-base/releases/22.04/release/ubuntu-base-22.04-base-riscv64.tar.gz
+    wget -N "$UBUNTU_BASE_URL"
     
     echo "Extracting Ubuntu Base..."
-    tar -xzf ubuntu-base-22.04-base-riscv64.tar.gz
+    tar -xzf "$UBUNTU_BASE_TARBALL"
     # Clean up tarball to save space/cache
-    rm ubuntu-base-22.04-base-riscv64.tar.gz
+    rm "$UBUNTU_BASE_TARBALL"
     cd "$SCRIPT_DIR"
 else
     echo "Filesystem check: Ubuntu Base already extracted."

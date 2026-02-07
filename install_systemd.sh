@@ -19,18 +19,18 @@ if ! dpkg -s qemu-user-static binfmt-support >/dev/null 2>&1; then
 fi
 
 if [ -x /usr/sbin/update-binfmts ]; then
-    sudo update-binfmts --enable qemu-riscv64 2>/dev/null || true
+    sudo update-binfmts --enable qemu-aarch64 2>/dev/null || true
 fi
 
-if [ ! -f /proc/sys/fs/binfmt_misc/qemu-riscv64 ]; then
-    sudo bash -c 'echo ":qemu-riscv64:M::\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xf3\x00:\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/usr/bin/qemu-riscv64-static:OC" > /proc/sys/fs/binfmt_misc/register' 2>/dev/null || true
+if [ ! -f /proc/sys/fs/binfmt_misc/qemu-aarch64 ]; then
+    sudo bash -c 'echo ":qemu-aarch64:M::\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xb7\x00:\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/usr/bin/qemu-aarch64-static:OC" > /proc/sys/fs/binfmt_misc/register' 2>/dev/null || true
 fi
 
 # Copy QEMU
-QEMU_CHROOT_PATH="/usr/bin/qemu-riscv64-chroot"
+QEMU_CHROOT_PATH="/usr/bin/qemu-aarch64-chroot"
 if [ ! -f "$UBUNTU_BASE$QEMU_CHROOT_PATH" ]; then
     sudo mkdir -p "$UBUNTU_BASE/usr/bin"
-    sudo cp /usr/bin/qemu-riscv64-static "$UBUNTU_BASE$QEMU_CHROOT_PATH"
+    sudo cp /usr/bin/qemu-aarch64-static "$UBUNTU_BASE$QEMU_CHROOT_PATH"
     sudo chmod +x "$UBUNTU_BASE$QEMU_CHROOT_PATH"
 fi
 
@@ -68,9 +68,9 @@ deb http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe
 EOF'
 fi
 
-if [ ! -f "$UBUNTU_BASE/usr/bin/qemu-riscv64-static" ]; then
-    sudo cp /usr/bin/qemu-riscv64-static "$UBUNTU_BASE/usr/bin/"
-    sudo chmod +x "$UBUNTU_BASE/usr/bin/qemu-riscv64-static"
+if [ ! -f "$UBUNTU_BASE/usr/bin/qemu-aarch64-static" ]; then
+    sudo cp /usr/bin/qemu-aarch64-static "$UBUNTU_BASE/usr/bin/"
+    sudo chmod +x "$UBUNTU_BASE/usr/bin/qemu-aarch64-static"
 fi
 
 # Update package lists
@@ -78,7 +78,7 @@ echo "Updating package lists..."
 if sudo chroot "$UBUNTU_BASE" /usr/bin/test -x /usr/bin/apt-get; then
     sudo env DEBIAN_FRONTEND=noninteractive chroot "$UBUNTU_BASE" /usr/bin/apt-get update 2>&1 | head -20
 else
-    (cd "$UBUNTU_BASE" && sudo env DEBIAN_FRONTEND=noninteractive /usr/bin/qemu-riscv64-static -L . /usr/bin/apt-get update) 2>&1 | head -20
+    (cd "$UBUNTU_BASE" && sudo env DEBIAN_FRONTEND=noninteractive /usr/bin/qemu-aarch64-static -L . /usr/bin/apt-get update) 2>&1 | head -20
 fi
 
 # Install systemd and essential system utilities
@@ -97,7 +97,7 @@ if sudo chroot "$UBUNTU_BASE" /usr/bin/test -x /usr/bin/apt-get; then
         rsync less file strace \
         2>&1 | tee /tmp/systemd_install.log
 else
-    (cd "$UBUNTU_BASE" && sudo env DEBIAN_FRONTEND=noninteractive /usr/bin/qemu-riscv64-static \
+    (cd "$UBUNTU_BASE" && sudo env DEBIAN_FRONTEND=noninteractive /usr/bin/qemu-aarch64-static \
         -L . /usr/bin/apt-get install -y --no-install-recommends \
         systemd systemd-sysv udev dbus networkd-dispatcher \
         iputils-ping netbase ca-certificates \
@@ -129,16 +129,29 @@ GADGET_SRC_DIR="$SCRIPT_DIR/systemd"
 if [ -d "$GADGET_SRC_DIR" ]; then
     echo "Installing USB gadget systemd unit..."
     sudo mkdir -p "$UBUNTU_BASE/usr/local/sbin"
+    sudo mkdir -p "$UBUNTU_BASE/usr/local/bin"
     sudo mkdir -p "$UBUNTU_BASE/etc/systemd/system"
     sudo mkdir -p "$UBUNTU_BASE/etc/systemd/network"
+    sudo mkdir -p "$UBUNTU_BASE/etc/default"
 
     sudo cp "$GADGET_SRC_DIR/usb-gadget.sh" "$UBUNTU_BASE/usr/local/sbin/usb-gadget.sh"
     sudo chmod 0755 "$UBUNTU_BASE/usr/local/sbin/usb-gadget.sh"
     sudo cp "$GADGET_SRC_DIR/usb-gadget.service" "$UBUNTU_BASE/etc/systemd/system/usb-gadget.service"
     sudo cp "$GADGET_SRC_DIR/usb-ecm.network" "$UBUNTU_BASE/etc/systemd/network/10-usb-ecm.network"
     sudo cp "$GADGET_SRC_DIR/usb-rndis.network" "$UBUNTU_BASE/etc/systemd/network/10-usb-rndis.network"
+    sudo cp "$GADGET_SRC_DIR/led-ready.sh" "$UBUNTU_BASE/usr/local/bin/led-ready.sh"
+    sudo chmod 0755 "$UBUNTU_BASE/usr/local/bin/led-ready.sh"
+    sudo cp "$GADGET_SRC_DIR/led-ready.service" "$UBUNTU_BASE/etc/systemd/system/led-ready.service"
+    sudo cp "$GADGET_SRC_DIR/led-ready.default" "$UBUNTU_BASE/etc/default/led-ready"
 
-    sudo systemctl --root "$UBUNTU_BASE" enable usb-gadget.service systemd-networkd || true
+    # Enable services without systemctl --root to avoid /proc warnings
+    sudo mkdir -p "$UBUNTU_BASE/etc/systemd/system/multi-user.target.wants"
+    sudo ln -sf /etc/systemd/system/usb-gadget.service \
+        "$UBUNTU_BASE/etc/systemd/system/multi-user.target.wants/usb-gadget.service"
+    sudo ln -sf /etc/systemd/system/led-ready.service \
+        "$UBUNTU_BASE/etc/systemd/system/multi-user.target.wants/led-ready.service"
+    sudo ln -sf /lib/systemd/system/systemd-networkd.service \
+        "$UBUNTU_BASE/etc/systemd/system/multi-user.target.wants/systemd-networkd.service" 2>/dev/null || true
 else
     echo "USB gadget systemd files not found at $GADGET_SRC_DIR"
 fi

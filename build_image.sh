@@ -6,13 +6,20 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# PTY remount can kill VSCode terminals; skip unless needed
+# sudo mount -o remount,gid=5,mode=620,ptmxmode=666 /dev/pts 2>/dev/null || true
+
 # Auto-detect paths
 UBUNTU_BASE="$SCRIPT_DIR/ubuntu_base"
-DUO_SDK_DIR="$SCRIPT_DIR/duo-buildroot-sdk"
+DUO_SDK_DIR="$SCRIPT_DIR/duo-buildroot-sdk-v2"
 
 # Find the latest SDK image (ignore stock backup to ensure we have fresh kernel)
 # We exclude *-ubuntu.img and *-stock.img to find the fresh build output
-IMG_SOURCE=$(find "$DUO_SDK_DIR/out" \( -name "milkv-duos-sd-*.img" -o -name "milkv-duos-sd_*.img" \) -not -name "*-stock.img" -not -name "*-ubuntu.img" -type f 2>/dev/null | sort -r | head -1)
+IMG_SOURCE=$(
+    find "$DUO_SDK_DIR/out" -maxdepth 1 -type f -name "*.img" \
+        -not -name "*-stock.img" -not -name "*-ubuntu.img" 2>/dev/null \
+        -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-
+)
 
 if [ -n "$IMG_SOURCE" ] && [ -f "$IMG_SOURCE" ]; then
     echo "Found latest SDK image: $IMG_SOURCE"
@@ -45,6 +52,17 @@ else
     echo "Checked: $DUO_SDK_DIR"
     echo "Please ensure you have run 'build_sdk.sh' successfully."
     exit 1
+fi
+
+# Detect the actual kernel release string (uname -r) from the SDK build output
+# This helps avoid mismatches like 5.10.4-tag--tag- vs 5.10.4
+KERNEL_RELEASE="$KERNEL_VERSION"
+KERNEL_RELEASE_FILE=$(find "$DUO_SDK_DIR" -name "kernel.release" | head -n 1)
+if [ -n "$KERNEL_RELEASE_FILE" ] && [ -f "$KERNEL_RELEASE_FILE" ]; then
+    KERNEL_RELEASE=$(cat "$KERNEL_RELEASE_FILE" | tr -d '\n')
+    echo "Detected Kernel Release: $KERNEL_RELEASE (from $KERNEL_RELEASE_FILE)"
+else
+    echo "Kernel release file not found; using $KERNEL_VERSION as release."
 fi
 
 SD_MOUNT="/mnt/sdcard_rootfs"
@@ -119,8 +137,23 @@ CURRENT_SIZE=$(sudo blockdev --getsize64 "${LOOP_DEV}p${ROOT_PART_NUM}")
 CURRENT_SIZE_MB=$((CURRENT_SIZE / 1024 / 1024))
 echo "Current rootfs size: ${CURRENT_SIZE_MB}MB"
 
-# Our expanded Ubuntu base needs ~1.2GB, so expand to 2GB to be safe
-TARGET_SIZE_MB=2048
+# Size the rootfs based on the Ubuntu base plus headroom
+if [ -z "${TARGET_SIZE_MB:-}" ]; then
+    BASE_SIZE_MB=$(sudo du -sm "$UBUNTU_BASE" 2>/dev/null | awk '{print $1}')
+    if [ -z "$BASE_SIZE_MB" ]; then
+        BASE_SIZE_MB=0
+    fi
+    # Add headroom for logs, apt, and future updates
+    TARGET_SIZE_MB=$((BASE_SIZE_MB + 512))
+    # Enforce a minimum size
+    if [ "$TARGET_SIZE_MB" -lt 2048 ]; then
+        TARGET_SIZE_MB=2048
+    fi
+    # Round up to the nearest 256MB for alignment
+    ROUND_MB=256
+    TARGET_SIZE_MB=$(( (TARGET_SIZE_MB + ROUND_MB - 1) / ROUND_MB * ROUND_MB ))
+fi
+echo "Target rootfs size: ${TARGET_SIZE_MB}MB (base: ${BASE_SIZE_MB:-unknown}MB)"
 
 if [ "$CURRENT_SIZE_MB" -lt "$TARGET_SIZE_MB" ]; then
     echo "Rootfs partition is too small (${CURRENT_SIZE_MB}MB < ${TARGET_SIZE_MB}MB)"
@@ -222,18 +255,16 @@ if [ -d "$KERNEL_MODULES_SRC" ]; then
     # Verify copy
     if [ -d "$UBUNTU_BASE/lib/modules/$KERNEL_VERSION" ]; then
         echo "✓ Modules for $KERNEL_VERSION installed successfully."
-        
-        # HACK: Fix for version mismatch (uname -r is 5.10.4-tag-, modules are 5.10.4)
-        # We blindly create a symlink from 5.10.4-tag- to 5.10.4 if it doesn't exist
-        if [ ! -d "$UBUNTU_BASE/lib/modules/${KERNEL_VERSION}-tag-" ]; then
-            echo "Creating symlink for ${KERNEL_VERSION}-tag- -> ${KERNEL_VERSION}..."
-            ln -sf "$KERNEL_VERSION" "$UBUNTU_BASE/lib/modules/${KERNEL_VERSION}-tag-"
-            
-            # Regenerate module dependencies for the suffixed kernel version
-            # This is crucial so modprobe can find modules via the symlink
-            echo "Regenerating module dependencies (depmod)..."
-            sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "depmod -a ${KERNEL_VERSION}-tag-"
+
+        # Ensure module directory exists for the actual kernel release (uname -r)
+        if [ ! -d "$UBUNTU_BASE/lib/modules/${KERNEL_RELEASE}" ]; then
+            echo "Creating symlink for ${KERNEL_RELEASE} -> ${KERNEL_VERSION}..."
+            ln -sfn "$KERNEL_VERSION" "$UBUNTU_BASE/lib/modules/${KERNEL_RELEASE}"
         fi
+
+        # Regenerate module dependencies for the detected kernel release
+        echo "Regenerating module dependencies (depmod)..."
+        sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-aarch64-static /bin/sh -c "depmod -a ${KERNEL_RELEASE}"
     else
         echo "Error: Failed to install modules for $KERNEL_VERSION"
         ls -la "$UBUNTU_BASE/lib/modules"
@@ -259,31 +290,54 @@ tmpfs           /var/tmp        tmpfs   defaults          0       0
 EOF"
 
 # Install essential packages missing from minimal base
-echo "Installing additional packages (fdisk, usbutils)..."
+echo "Installing additional packages (fdisk, usbutils, wifi tools/firmware)..."
 # We need to temporarily resolve DNS to install packages
 sudo cp /etc/resolv.conf "$UBUNTU_BASE/etc/resolv.conf"
-sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "apt-get update && apt-get install -y fdisk usbutils"
+sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-aarch64-static /bin/sh -c "apt-get update && apt-get install -y fdisk usbutils iw wpasupplicant wireless-regdb rfkill linux-firmware"
+# Clean apt caches to keep the image small
+sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-aarch64-static /bin/sh -c "apt-get clean && rm -rf /var/lib/apt/lists/*"
 # Restore minimal resolv.conf
 sudo bash -c 'echo "nameserver 8.8.8.8" > "$UBUNTU_BASE/etc/resolv.conf"'
 
 # Set root password and configure system
 echo "Configuring Ubuntu system..."
-sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-riscv64-static /bin/sh -c "echo 'root:milkv' | chpasswd" 2>/dev/null || true
+sudo chroot "$UBUNTU_BASE" /usr/bin/qemu-aarch64-static /bin/sh -c "echo 'root:milkv' | chpasswd" 2>/dev/null || true
 
 # Set hostname
 echo "milkv-duos" | sudo tee "$UBUNTU_BASE/etc/hostname" > /dev/null
 
 # Create a robust USB gadget fix script
-# This ensures modules are loaded even if build-time depmod failed
+# This ensures modules are loaded and gadget configfs is cleanly re-applied
 echo "Creating USB gadget fix script..."
 sudo tee "$UBUNTU_BASE/usr/local/bin/fix-usb-gadget.sh" > /dev/null << 'EOF'
 #!/bin/bash
-# Force regenerate module dependencies
-depmod -a
-# Try to load g_ether explicitly
-modprobe g_ether
-# Ensure network is up
-ip link set usb0 up
+set -euo pipefail
+
+# Ensure configfs is mounted
+if ! mountpoint -q /sys/kernel/config; then
+    mount -t configfs none /sys/kernel/config || true
+fi
+
+# Load gadget modules if they exist as modules
+for mod in libcomposite usb_f_ecm usb_f_rndis usb_u_ether; do
+    modprobe "$mod" 2>/dev/null || true
+done
+
+# Restart gadget service if systemd is available
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl restart usb-gadget.service || true
+else
+    /usr/local/sbin/usb-gadget.sh restart || true
+fi
+
+# Ensure network interfaces are up
+ip link set usb0 up 2>/dev/null || true
+ip link set usb1 up 2>/dev/null || true
+
+# Re-apply network config
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl restart systemd-networkd || true
+fi
 EOF
 sudo chmod +x "$UBUNTU_BASE/usr/local/bin/fix-usb-gadget.sh"
 
@@ -291,7 +345,9 @@ sudo chmod +x "$UBUNTU_BASE/usr/local/bin/fix-usb-gadget.sh"
 sudo tee "$UBUNTU_BASE/etc/systemd/system/usb-gadget-fix.service" > /dev/null << 'EOF'
 [Unit]
 Description=Fix USB Gadget Modules
-After=systemd-modules-load.service
+After=systemd-modules-load.service usb-gadget.service
+Wants=usb-gadget.service
+ConditionPathExists=/sys/class/udc
 
 [Service]
 Type=oneshot
@@ -305,29 +361,47 @@ EOF
 # Enable the service
 sudo ln -sf /etc/systemd/system/usb-gadget-fix.service "$UBUNTU_BASE/etc/systemd/system/multi-user.target.wants/usb-gadget-fix.service"
 
-# Configure g_ether module auto-loading
-echo "Configuring g_ether module auto-loading..."
-sudo mkdir -p etc/modules-load.d
-echo "g_ether" | sudo tee etc/modules-load.d/g_ether.conf > /dev/null
+# Configure USB gadget modules auto-loading (if built as modules)
+echo "Configuring USB gadget module auto-loading..."
+sudo mkdir -p "$UBUNTU_BASE/etc/modules-load.d"
+sudo tee "$UBUNTU_BASE/etc/modules-load.d/usb-gadget.conf" > /dev/null << 'EOF'
+libcomposite
+usb_f_ecm
+usb_f_rndis
+usb_u_ether
+EOF
+# Remove legacy g_ether autoload if present (can steal UDC)
+sudo rm -f "$UBUNTU_BASE/etc/modules-load.d/g_ether.conf"
 
 # Configure network for RNDIS (USB Ethernet gadget)
-sudo mkdir -p etc/systemd/network
-sudo tee etc/systemd/network/30-usb0.network > /dev/null << 'EOF'
-[Match]
-Name=usb0
-
-[Network]
-Address=192.168.42.1/24
-DHCPServer=yes
-
-[DHCPServer]
-PoolOffset=100
-PoolSize=20
-EOF
+# Note: primary network configs are installed in install_systemd.sh
+sudo mkdir -p "$UBUNTU_BASE/etc/systemd/network"
 
 # Enable networkd
 sudo mkdir -p "$UBUNTU_BASE/etc/systemd/system/multi-user.target.wants"
 sudo ln -sf /lib/systemd/system/systemd-networkd.service "$UBUNTU_BASE/etc/systemd/system/multi-user.target.wants/" 2>/dev/null || true
+
+# Validate USB gadget setup in rootfs
+echo "Validating USB gadget setup..."
+usb_gadget_fail=0
+check_usb_file() {
+    local path="$1"
+    if [ ! -e "$path" ]; then
+        echo "  Missing: $path"
+        usb_gadget_fail=1
+    fi
+}
+check_usb_file "$UBUNTU_BASE/usr/local/sbin/usb-gadget.sh"
+check_usb_file "$UBUNTU_BASE/etc/systemd/system/usb-gadget.service"
+check_usb_file "$UBUNTU_BASE/etc/systemd/network/10-usb-ecm.network"
+check_usb_file "$UBUNTU_BASE/etc/systemd/network/10-usb-rndis.network"
+check_usb_file "$UBUNTU_BASE/usr/local/bin/fix-usb-gadget.sh"
+check_usb_file "$UBUNTU_BASE/usr/local/bin/led-ready.sh"
+check_usb_file "$UBUNTU_BASE/etc/systemd/system/led-ready.service"
+if [ "$usb_gadget_fail" -ne 0 ]; then
+    echo "USB gadget validation failed. Ensure install_systemd.sh ran successfully."
+    exit 1
+fi
 
 # Create getty service for serial console
 sudo mkdir -p "$UBUNTU_BASE/etc/systemd/system/getty.target.wants"
@@ -434,9 +508,4 @@ echo "After booting:"
 echo "  Serial console: 115200 baud on ttyS0"
 echo "  SSH: ssh root@192.168.42.1 (via USB RNDIS)"
 echo "  Password: milkv"
-echo ""
-echo "NOTE: Rootfs partition is small (~768MB). Resize after boot:"
-echo "  fdisk /dev/mmcblk0  # delete & recreate partition ${ROOT_PART_NUM}"
-echo "  reboot"
-echo "  resize2fs /dev/mmcblk0p${ROOT_PART_NUM}"
 echo ""
