@@ -227,13 +227,15 @@ screen /dev/ttyUSB0 115200
 | UART0 RX       | Pin 10 (A17) ← adapter TX |
 | GND            | Pin 9              |
 
-## Future work
+## ~~Future work~~ (deprecated)
 
-I may sync more features from the other repository when possible, for example:
+~~I may sync more features from the other repository when possible, for example:~~
 
-- **WiringX** — GPIO library support.
-- **ROS2** — Robot Operating System 2 integration.
-- Other improvements as they mature.
+- ~~**WiringX** — GPIO library support.~~
+- ~~**ROS2** — Robot Operating System 2 integration.~~
+- ~~Other improvements as they mature.~~
+
+*Going a different path: ROS2 does not run well on this board; we are likely to use **FastDDS on Buildroot** instead.*
 
 ## License and disclaimer
 

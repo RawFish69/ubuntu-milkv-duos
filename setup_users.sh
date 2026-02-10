@@ -109,7 +109,7 @@ sudo bash -c "cat > $UBUNTU_BASE/etc/motd << 'EOF'
 
 System Information:
   - Ubuntu 22.04 LTS (Jammy Jellyfish) for ARM64
-  - Kernel: Linux 5.10 (custom build)
+  - Kernel: Linux ARM64 5.10 (custom build)
   - USB-C Networking: Enabled via USB Gadget
 
 Available Tools:
@@ -128,6 +128,15 @@ Documentation: /root/README.md (if available)
 Support: https://github.com/milkv-duo
 
 EOF"
+
+# Force login/SSH banner to show ARM64 instead of host kernel machine (e.g. RISC-V)
+echo "Setting /etc/issue and /etc/issue.net to show ARM64..."
+sudo bash -c "cat > $UBUNTU_BASE/etc/issue << 'ISSUE'
+Ubuntu 22.04 LTS (Jammy Jellyfish)
+Kernel: Linux ARM64 5.10 (custom build)
+
+ISSUE"
+sudo cp "$UBUNTU_BASE/etc/issue" "$UBUNTU_BASE/etc/issue.net"
 
 # Cleanup bind mounts (only if not skipped)
 if [ "$SKIP_CLEANUP" != "true" ]; then
