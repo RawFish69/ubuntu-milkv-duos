@@ -67,7 +67,7 @@ jobs:
           ls -la ./*.sh 2>/dev/null || true
 
       - name: Disk space (start)
-        run: df -h
+        run: df -h || true
 
       - name: Cache SDK and ubuntu_base
         if: inputs.cleanup_level != 'aggressive'
@@ -89,7 +89,7 @@ jobs:
         run: |
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/* || true
-          df -h
+          df -h || true
 
       - name: Configure environment
         run: bash ./configure.sh
@@ -102,7 +102,7 @@ jobs:
             echo "Removed SDK .git to save space"
           fi
           sudo find . -type f \( -name "*.tmp" -o -name "*.log" \) -delete 2>/dev/null || true
-          df -h
+          df -h || true
 
       # --- SDK build ---
       - name: Build SDK
@@ -113,7 +113,7 @@ jobs:
         if: (inputs.build_type == 'sdk_only' || inputs.build_type == 'full') && inputs.cleanup_level != 'none'
         run: |
           echo "=== Cleanup: ${{ inputs.cleanup_level }} ==="
-          df -h
+          df -h || true
           if [ "${{ inputs.cleanup_level }}" = "intermediate" ] || [ "${{ inputs.cleanup_level }}" = "aggressive" ]; then
             sudo rm -rf duo-buildroot-sdk-v2/buildroot-*/dl 2>/dev/null || true
             sudo rm -rf duo-buildroot-sdk-v2/buildroot-*/output/build 2>/dev/null || true
@@ -127,7 +127,7 @@ jobs:
             sudo apt-get autoremove -y
             sudo rm -rf /tmp/* /var/tmp/* /var/cache/apt/archives/* 2>/dev/null || true
           fi
-          df -h
+          df -h || true
 
       # --- RootFS (systemd + users) ---
       - name: Install systemd into ubuntu_base
@@ -143,7 +143,7 @@ jobs:
           sudo find ubuntu_base/usr/share/man ubuntu_base/usr/share/info -type f -delete 2>/dev/null || true
           sudo find ubuntu_base/usr/share/locale -mindepth 1 -maxdepth 1 ! -name "en_US*" -exec rm -rf {} + 2>/dev/null || true
           sudo rm -rf ubuntu_base/tmp/* ubuntu_base/var/tmp/* 2>/dev/null || true
-          df -h
+          df -h || true
 
       - name: Setup users
         if: inputs.build_type == 'systemd_only' || inputs.build_type == 'full'
@@ -154,7 +154,7 @@ jobs:
         run: |
           sudo rm -rf ubuntu_base/tmp/* ubuntu_base/var/tmp/* 2>/dev/null || true
           sudo find ubuntu_base -type f -name "*.log" -delete 2>/dev/null || true
-          df -h
+          df -h || true
 
       # --- Image pack ---
       - name: Build final image
@@ -169,7 +169,7 @@ jobs:
           sudo find duo-buildroot-sdk-v2/out -name "*.img" ! -name "*-ubuntu.img" -delete 2>/dev/null || true
           sudo find duo-buildroot-sdk-v2/out -name "*.img.backup" -delete 2>/dev/null || true
           sudo rm -rf /tmp/* /var/tmp/* 2>/dev/null || true
-          df -h
+          df -h || true
 
       - name: Verify image artifact
         if: inputs.build_type == 'image_only' || inputs.build_type == 'full'
